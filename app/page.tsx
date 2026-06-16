@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { PencilLine, Layers, List, Upload, BookOpen } from "lucide-react";
 import { Tabs as TabsPrimitive } from "radix-ui";
-import { Tabs, TabsContent } from "@/components/ui/tabs";
+import { TabsContent } from "@/components/ui/tabs";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import AddVocabForm from "@/components/AddVocabForm";
 import Flashcards from "@/components/Flashcards";
@@ -53,20 +53,40 @@ export default function Home() {
   }, []);
 
   return (
-    <div className="flex min-h-full flex-col">
-      <header className="sticky top-0 z-10 border-b border-border/70 bg-background/85 backdrop-blur">
-        <div className="mx-auto flex max-w-4xl items-baseline gap-3 px-4 py-4 sm:px-6">
-          <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
+    <TabsPrimitive.Root
+      value={tab}
+      onValueChange={setTab}
+      className="flex min-h-full flex-col"
+    >
+      {/* Navbar: brand · inline tab nav (desktop) · word count */}
+      <header className="sticky top-0 z-20 border-b border-border/70 bg-background/85 backdrop-blur">
+        <div className="mx-auto flex w-full max-w-5xl items-center gap-4 px-4 py-3 sm:px-6">
+          <h1 className="text-xl font-semibold tracking-tight whitespace-nowrap sm:text-2xl">
             <span className="jp">日本語</span>{" "}
             <span className="text-muted-foreground font-normal">Vocab</span>
           </h1>
-          <p className="ml-auto text-sm text-muted-foreground">
+
+          {/* Desktop / tablet: tabs live in the navbar itself. */}
+          <TabsPrimitive.List className="mx-auto hidden items-center gap-1 sm:flex">
+            {TABS.map((t) => (
+              <TabsPrimitive.Trigger
+                key={t.value}
+                value={t.value}
+                className="inline-flex items-center gap-2 rounded-full px-3.5 py-2 text-sm font-medium text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 data-[state=active]:bg-primary/10 data-[state=active]:text-primary"
+              >
+                <t.icon className="size-4 shrink-0" aria-hidden />
+                {t.label}
+              </TabsPrimitive.Trigger>
+            ))}
+          </TabsPrimitive.List>
+
+          <p className="ml-auto text-sm whitespace-nowrap text-muted-foreground sm:ml-0">
             {loading ? "Loading…" : `${vocab.length} words`}
           </p>
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-4xl flex-1 px-4 pt-6 pb-28 sm:px-6 sm:py-10">
+      <main className="mx-auto w-full max-w-5xl flex-1 px-4 pt-6 pb-28 sm:px-6 sm:py-10">
         {error && (
           <Alert variant="destructive" className="mb-6">
             <AlertTitle>Couldn’t load your vocabulary</AlertTitle>
@@ -77,42 +97,28 @@ export default function Home() {
           </Alert>
         )}
 
-        <Tabs value={tab} onValueChange={setTab} className="gap-8">
-          {/* Desktop / tablet: elevated pill group, centered at the top. */}
-          <TabsPrimitive.List
-            className="mx-auto hidden w-fit items-center gap-1 rounded-full border border-border bg-card p-1.5 shadow-sm sm:flex"
-          >
-            {TABS.map((t) => (
-              <TabsPrimitive.Trigger
-                key={t.value}
-                value={t.value}
-                className="inline-flex items-center gap-2 rounded-full px-5 py-2.5 text-base font-medium text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 data-[state=active]:bg-primary/10 data-[state=active]:text-primary"
-              >
-                <t.icon className="size-5 shrink-0" aria-hidden />
-                {t.label}
-              </TabsPrimitive.Trigger>
-            ))}
-          </TabsPrimitive.List>
-
-          <TabsContent value="add">
-            <AddVocabForm onAdded={reload} />
-          </TabsContent>
-          <TabsContent value="dictionary">
-            <DictionarySearch onAdded={reload} />
-          </TabsContent>
-          <TabsContent value="flashcards">
-            <Flashcards vocab={vocab} />
-          </TabsContent>
-          <TabsContent value="list">
-            <VocabTable vocab={vocab} onChanged={reload} />
-          </TabsContent>
-          {/* forceMount keeps the Import panel (and any in-progress upload /
-              edits) alive when you switch tabs — e.g. to check a word in the
-              Dictionary — instead of unmounting and losing the work. */}
-          <TabsContent value="import" forceMount className="data-[state=inactive]:hidden">
-            <ImportPanel onImported={reload} />
-          </TabsContent>
-        </Tabs>
+        <TabsContent value="add">
+          <AddVocabForm onAdded={reload} />
+        </TabsContent>
+        <TabsContent value="dictionary">
+          <DictionarySearch onAdded={reload} />
+        </TabsContent>
+        <TabsContent value="flashcards">
+          <Flashcards vocab={vocab} />
+        </TabsContent>
+        <TabsContent value="list">
+          <VocabTable vocab={vocab} onChanged={reload} />
+        </TabsContent>
+        {/* forceMount keeps the Import panel (and any in-progress upload /
+            edits) alive when you switch tabs — e.g. to check a word in the
+            Dictionary — instead of unmounting and losing the work. */}
+        <TabsContent
+          value="import"
+          forceMount
+          className="data-[state=inactive]:hidden"
+        >
+          <ImportPanel vocab={vocab} onImported={reload} />
+        </TabsContent>
       </main>
 
       {/* Mobile: fixed bottom navigation in the thumb zone. */}
@@ -154,6 +160,6 @@ export default function Home() {
           })}
         </ul>
       </nav>
-    </div>
+    </TabsPrimitive.Root>
   );
 }

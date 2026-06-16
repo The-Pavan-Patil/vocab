@@ -1,11 +1,17 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { FileUp, Loader2, Trash2 } from "lucide-react";
-import { createVocab, importFile } from "@/lib/api";
-import { CATEGORIES, COLUMNS, type VocabInput } from "@/lib/types";
+import { FileUp, Loader2, RefreshCw, Trash2 } from "lucide-react";
+import { createVocab, importFile, updateVocab } from "@/lib/api";
+import {
+  CATEGORIES,
+  COLUMNS,
+  type Vocab,
+  type VocabInput,
+} from "@/lib/types";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import {
   Empty,
@@ -31,12 +37,49 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
-export default function ImportPanel({ onImported }: { onImported: () => void }) {
+// Build a PATCH that only carries non-empty cells, so updating a word already
+// in the list never wipes fields the user filled in (e.g. their Marathi tips).
+function nonEmptyPatch(r: VocabInput): Partial<VocabInput> {
+  const patch: Partial<VocabInput> = {};
+  (["kanji", "romaji", "english", "tips", "category"] as const).forEach((k) => {
+    const v = (r[k] ?? "").toString().trim();
+    if (v) patch[k] = v;
+  });
+  return patch;
+}
+
+export default function ImportPanel({
+  vocab,
+  onImported,
+}: {
+  vocab: Vocab[];
+  onImported: () => void;
+}) {
   const [rows, setRows] = useState<VocabInput[] | null>(null);
   const [filename, setFilename] = useState("");
   const [parsing, setParsing] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [busy, setBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // Words already saved, keyed by trimmed kanji — the duplicate lookup.
+  const existingByKanji = useMemo(() => {
+    const m = new Map<string, Vocab>();
+    for (const v of vocab) m.set(v.kanji.trim(), v);
+    return m;
+  }, [vocab]);
+
+  const dupFor = (r: VocabInput): Vocab | undefined => {
+    const k = (r.kanji ?? "").trim();
+    return k ? existingByKanji.get(k) : undefined;
+  };
+
+  const allRows = rows ?? [];
+  const newRows = allRows.filter(
+    (r) => (r.kanji ?? "").trim() && !dupFor(r)
+  );
+  const dupRows = allRows.filter((r) => dupFor(r));
+  const newCount = newRows.length;
+  const dupCount = dupRows.length;
 
   async function onPick(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -65,24 +108,71 @@ export default function ImportPanel({ onImported }: { onImported: () => void }) 
   }
 
   function removeRow(i: number) {
-    setRows((rs) => (rs ? rs.filter((_, idx) => idx !== i) : rs));
+    setRows((rs) => {
+      if (!rs) return rs;
+      const next = rs.filter((_, idx) => idx !== i);
+      return next.length ? next : null;
+    });
   }
 
-  async function confirmImport() {
-    if (!rows || rows.length === 0) return;
-    setSaving(true);
+  // Import only the NEW words; leave duplicates in the preview to update.
+  async function importNew() {
+    if (newCount === 0) return;
+    setBusy(true);
     try {
-      const valid = rows.filter((r) => r.kanji?.trim());
-      const n = await createVocab(valid);
-      toast.success(`Imported ${n} word${n === 1 ? "" : "s"}`);
-      setRows(null);
-      setFilename("");
-      if (fileRef.current) fileRef.current.value = "";
+      const n = await createVocab(newRows);
+      toast.success(`Imported ${n} new word${n === 1 ? "" : "s"}`);
+      setRows((rs) => {
+        const remaining = (rs ?? []).filter((r) => dupFor(r));
+        return remaining.length ? remaining : null;
+      });
       onImported();
     } catch (e) {
       toast.error("Import failed", { description: (e as Error).message });
     } finally {
-      setSaving(false);
+      setBusy(false);
+    }
+  }
+
+  // Update one existing word from its (edited) row, then drop it.
+  async function updateOne(i: number) {
+    const r = allRows[i];
+    const dup = r && dupFor(r);
+    if (!dup) return;
+    setBusy(true);
+    try {
+      await updateVocab(dup.id, nonEmptyPatch(r));
+      toast.success("Updated", { description: r.kanji });
+      removeRow(i);
+      onImported();
+    } catch (e) {
+      toast.error("Update failed", { description: (e as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Update every duplicate at once.
+  async function updateAll() {
+    const targets = allRows.filter((r) => dupFor(r));
+    if (targets.length === 0) return;
+    setBusy(true);
+    try {
+      await Promise.all(
+        targets.map((r) => updateVocab(dupFor(r)!.id, nonEmptyPatch(r)))
+      );
+      toast.success(
+        `Updated ${targets.length} existing word${targets.length === 1 ? "" : "s"}`
+      );
+      setRows((rs) => {
+        const remaining = (rs ?? []).filter((r) => !dupFor(r));
+        return remaining.length ? remaining : null;
+      });
+      onImported();
+    } catch (e) {
+      toast.error("Update failed", { description: (e as Error).message });
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -107,6 +197,7 @@ export default function ImportPanel({ onImported }: { onImported: () => void }) 
           <EmptyDescription>
             Upload a CSV, Excel (.xlsx/.xls), Word (.docx) or PDF with the
             columns: Kanji · Romaji · English · Tips (Marathi) · Category.
+            Multiple sections/tables are all read.
           </EmptyDescription>
         </EmptyHeader>
         <Button
@@ -131,71 +222,116 @@ export default function ImportPanel({ onImported }: { onImported: () => void }) 
                 Preview — {rows.length} row{rows.length === 1 ? "" : "s"}
               </h3>
               <p className="text-sm text-muted-foreground">
-                Edit any cell before importing.
+                {newCount} new · {dupCount} already in your list. Edit any cell
+                first.
               </p>
             </div>
-            <Button onClick={confirmImport} disabled={saving}>
-              {saving ? "Importing…" : `Confirm import (${rows.length})`}
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              {dupCount > 0 && (
+                <Button
+                  variant="outline"
+                  onClick={updateAll}
+                  disabled={busy}
+                >
+                  <RefreshCw aria-hidden />
+                  Update {dupCount} existing
+                </Button>
+              )}
+              <Button onClick={importNew} disabled={busy || newCount === 0}>
+                {busy ? "Working…" : `Import ${newCount} new`}
+              </Button>
+            </div>
           </div>
+
+          {dupCount > 0 && (
+            <p className="text-xs text-muted-foreground">
+              Words already in your list can’t be imported again — use{" "}
+              <strong>Update</strong> instead. Only filled-in cells overwrite, so
+              your existing tips are kept.
+            </p>
+          )}
 
           <div className="overflow-x-auto rounded-xl border">
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-24">Status</TableHead>
                   {COLUMNS.map((c) => (
                     <TableHead key={c.key}>{c.label}</TableHead>
                   ))}
-                  <TableHead className="w-12" />
+                  <TableHead className="w-28 text-right">Action</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {rows.map((r, i) => (
-                  <TableRow key={i}>
-                    {COLUMNS.map((c) => (
-                      <TableCell key={c.key} className="align-top">
-                        {c.key === "category" ? (
-                          <Select
-                            value={r.category || undefined}
-                            onValueChange={(val) =>
-                              editCell(i, "category", val)
-                            }
-                          >
-                            <SelectTrigger size="sm" className="w-full">
-                              <SelectValue placeholder="—" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectGroup>
-                                {CATEGORIES.map((x) => (
-                                  <SelectItem key={x} value={x}>
-                                    {x}
-                                  </SelectItem>
-                                ))}
-                              </SelectGroup>
-                            </SelectContent>
-                          </Select>
+                {rows.map((r, i) => {
+                  const dup = dupFor(r);
+                  return (
+                    <TableRow key={i} className={dup ? "bg-muted/40" : undefined}>
+                      <TableCell className="align-top">
+                        {dup ? (
+                          <Badge variant="secondary">In list</Badge>
                         ) : (
-                          <Input
-                            className={c.key === "kanji" ? "jp" : undefined}
-                            value={(r[c.key] as string) ?? ""}
-                            onChange={(e) => editCell(i, c.key, e.target.value)}
-                          />
+                          <Badge variant="outline">New</Badge>
                         )}
                       </TableCell>
-                    ))}
-                    <TableCell className="align-top">
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className="text-muted-foreground hover:text-destructive"
-                        onClick={() => removeRow(i)}
-                        aria-label="Remove row"
-                      >
-                        <Trash2 aria-hidden />
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                      {COLUMNS.map((c) => (
+                        <TableCell key={c.key} className="align-top">
+                          {c.key === "category" ? (
+                            <Select
+                              value={r.category || undefined}
+                              onValueChange={(val) =>
+                                editCell(i, "category", val)
+                              }
+                            >
+                              <SelectTrigger size="sm" className="w-full">
+                                <SelectValue placeholder="—" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectGroup>
+                                  {CATEGORIES.map((x) => (
+                                    <SelectItem key={x} value={x}>
+                                      {x}
+                                    </SelectItem>
+                                  ))}
+                                </SelectGroup>
+                              </SelectContent>
+                            </Select>
+                          ) : (
+                            <Input
+                              className={c.key === "kanji" ? "jp" : undefined}
+                              value={(r[c.key] as string) ?? ""}
+                              onChange={(e) => editCell(i, c.key, e.target.value)}
+                            />
+                          )}
+                        </TableCell>
+                      ))}
+                      <TableCell className="align-top text-right">
+                        <div className="flex justify-end gap-1">
+                          {dup && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => updateOne(i)}
+                              disabled={busy}
+                            >
+                              Update
+                            </Button>
+                          )}
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="text-muted-foreground hover:text-destructive"
+                            onClick={() => removeRow(i)}
+                            disabled={busy}
+                            aria-label="Remove row"
+                          >
+                            <Trash2 aria-hidden />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           </div>

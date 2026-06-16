@@ -20,6 +20,18 @@ const FIELD_ORDER: (keyof VocabInput)[] = [
   "category",
 ];
 
+// Priority for *header* detection. `tips` is checked before `english` so a label
+// like "Marathi meaning / my tips" claims the tips column via "marathi"/"tips"
+// instead of being grabbed by english's broad "meaning" synonym (which would
+// otherwise overwrite the real English column with the blank tips cell).
+const HEADER_MATCH_ORDER: (keyof VocabInput)[] = [
+  "kanji",
+  "romaji",
+  "tips",
+  "english",
+  "category",
+];
+
 function normalize(s: string): string {
   return String(s ?? "").trim().toLowerCase();
 }
@@ -30,7 +42,7 @@ function mapHeaders(headers: string[]): (keyof VocabInput | null)[] | null {
   let matched = false;
   const mapping = headers.map((h) => {
     const n = normalize(h);
-    for (const field of FIELD_ORDER) {
+    for (const field of HEADER_MATCH_ORDER) {
       // Substring match so labels like "Tips (Marathi)" or "English Meaning" still map.
       if (HEADER_SYNONYMS[field].some((syn) => n === syn || n.includes(syn))) {
         matched = true;
@@ -96,26 +108,35 @@ function parseExcel(buffer: Buffer): VocabInput[] {
   return matrixToVocab(rows.map((r) => r.map((c) => String(c ?? ""))));
 }
 
+function cleanCell(cell: string): string {
+  return cell
+    .replace(/<[^>]+>/g, " ") // strip tags
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function htmlTableToRows(table: string): string[][] {
+  const rowMatches = table.match(/<tr[\s\S]*?<\/tr>/gi) ?? [];
+  return rowMatches.map((tr) => {
+    const cellMatches = tr.match(/<t[dh][\s\S]*?<\/t[dh]>/gi) ?? [];
+    return cellMatches.map(cleanCell);
+  });
+}
+
 async function parseDocx(buffer: Buffer): Promise<VocabInput[]> {
   const { value: html } = await mammoth.convertToHtml({ buffer });
-  // Extract the first table's rows/cells from the generated HTML.
-  const tableMatch = html.match(/<table[\s\S]*?<\/table>/i);
-  if (!tableMatch) return [];
-  const rowMatches = tableMatch[0].match(/<tr[\s\S]*?<\/tr>/gi) ?? [];
-  const rows: string[][] = rowMatches.map((tr) => {
-    const cellMatches = tr.match(/<t[dh][\s\S]*?<\/t[dh]>/gi) ?? [];
-    return cellMatches.map((cell) =>
-      cell
-        .replace(/<[^>]+>/g, " ") // strip tags
-        .replace(/&nbsp;/g, " ")
-        .replace(/&amp;/g, "&")
-        .replace(/&lt;/g, "<")
-        .replace(/&gt;/g, ">")
-        .replace(/\s+/g, " ")
-        .trim()
-    );
-  });
-  return matrixToVocab(rows);
+  // Many documents split vocab across several sections (e.g. Nouns / Verbs /
+  // Adjectives), each rendered as its own table with its own header row.
+  // Parse EVERY table independently and concatenate, so all sections import —
+  // not just the first one.
+  const tableMatches = html.match(/<table[\s\S]*?<\/table>/gi) ?? [];
+  return tableMatches.flatMap((table) =>
+    matrixToVocab(htmlTableToRows(table))
+  );
 }
 
 async function parsePdf(buffer: Buffer): Promise<VocabInput[]> {
