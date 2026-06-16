@@ -1,36 +1,58 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 日本語 Vocab — Japanese Study App
 
-## Getting Started
+A personal Next.js app for studying Japanese vocabulary. Each word has 5 attributes:
+**Kanji, Romaji, English meaning, Tips (Marathi), Category** (noun/verb/adjective/…).
 
-First, run the development server:
+## Features
+- **Add Vocab** — form to add words.
+- **Flashcards** — front shows Kanji + Romaji; flip / **Show** reveals the English meaning;
+  **Hint** reveals the Marathi tip. Shuffle + category filter + prev/next.
+- **Vocab List** — searchable table of all columns with inline edit & delete.
+- **Export** — download the whole list as **.docx** or **PDF** (kanji + Marathi render correctly
+  via embedded Noto fonts).
+- **Import** — upload **CSV / Excel (.xlsx, .xls) / Word (.docx) / PDF** with a 5-column table;
+  review/edit the parsed preview, then confirm to bulk-insert.
 
+## Tech
+Next.js (App Router, TS) · Tailwind CSS v4 · Supabase (Postgres) · `docx`, `pdf-lib` (export) ·
+`papaparse`, `xlsx`, `mammoth`, `pdf-parse` (import).
+
+## Setup
+
+### 1. Create the Supabase project
+1. Create a free project at <https://supabase.com>.
+2. Open **SQL Editor → New query**, paste the contents of [`supabase/schema.sql`](./supabase/schema.sql),
+   and run it to create the `vocab` table.
+3. Go to **Project Settings → API** and copy the **Project URL** and the **service-role** key.
+
+### 2. Configure environment
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+cp .env.local.example .env.local
 ```
+Fill in:
+```
+NEXT_PUBLIC_SUPABASE_URL=https://<your-project>.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=<your-service-role-key>
+```
+The service-role key is used only by server-side API routes and is never sent to the browser.
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### 3. Run
+```bash
+npm install
+npm run dev
+```
+Open <http://localhost:3000>.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Import file format
+The first row may be a header. Recognized column names (case-insensitive, any order):
+`kanji/japanese/word`, `romaji/reading`, `english/meaning`, `tips/marathi/hint`, `category/type`.
+If no header is recognized, columns are read positionally in the order above.
+CSV and Excel parse most reliably; PDF table parsing is best-effort — always review the preview.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Fonts
+PDF export embeds `public/fonts/NotoSansJP-Regular.ttf` (kanji) and
+`public/fonts/NotoSansDevanagari-Regular.ttf` (Marathi). Default PDF fonts cannot render these scripts.
 
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Notes
+- No login: a single shared vocab list. Don't deploy publicly without adding protection.
+- `xlsx` (SheetJS) from the npm registry has known advisories; acceptable for personal/local use.
