@@ -1,13 +1,16 @@
 import { NextResponse } from "next/server";
-import { supabase, VOCAB_TABLE } from "@/lib/supabase";
+import { requireUser } from "@/lib/supabase/require-user";
 import type { VocabInput } from "@/lib/types";
 
 export const runtime = "nodejs";
 
 type Params = { params: Promise<{ id: string }> };
 
-// PATCH /api/vocab/[id] — update editable fields of one record.
+// PATCH /api/vocab/[id] — update editable fields of one of the user's records.
 export async function PATCH(request: Request, { params }: Params) {
+  const auth = await requireUser();
+  if ("response" in auth) return auth.response;
+
   const { id } = await params;
   let body: Partial<VocabInput>;
   try {
@@ -27,22 +30,29 @@ export async function PATCH(request: Request, { params }: Params) {
     return NextResponse.json({ error: "Kanji cannot be empty." }, { status: 400 });
   }
 
-  const { data, error } = await supabase
-    .from(VOCAB_TABLE)
+  // RLS limits this to the user's own rows; another user's id matches nothing.
+  const { data, error } = await auth.supabase
+    .from("vocab")
     .update(update)
     .eq("id", id)
     .select()
-    .single();
+    .maybeSingle();
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+  if (!data) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
   return NextResponse.json({ data });
 }
 
-// DELETE /api/vocab/[id] — remove one record.
+// DELETE /api/vocab/[id] — remove one of the user's records.
 export async function DELETE(_request: Request, { params }: Params) {
+  const auth = await requireUser();
+  if ("response" in auth) return auth.response;
+
   const { id } = await params;
-  const { error } = await supabase.from(VOCAB_TABLE).delete().eq("id", id);
+  const { error } = await auth.supabase.from("vocab").delete().eq("id", id);
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }

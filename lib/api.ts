@@ -11,10 +11,24 @@ async function parseJson(res: Response): Promise<Record<string, unknown>> {
   }
 }
 
+// Throw on non-2xx; on 401 (session missing/expired) bounce to /login so the
+// proxy can re-gate. Centralizes auth handling for every fetcher below.
+function ensureOk(
+  res: Response,
+  json: Record<string, unknown>,
+  fallback: string
+): void {
+  if (res.ok) return;
+  if (res.status === 401 && typeof window !== "undefined") {
+    window.location.assign("/login");
+  }
+  throw new Error((json.error as string) ?? fallback);
+}
+
 export async function fetchVocab(): Promise<Vocab[]> {
   const res = await fetch("/api/vocab", { cache: "no-store" });
   const json = await parseJson(res);
-  if (!res.ok) throw new Error((json.error as string) ?? "Failed to load vocab");
+  ensureOk(res, json, "Failed to load vocab");
   return json.data as Vocab[];
 }
 
@@ -28,7 +42,7 @@ export async function createVocab(
     body: JSON.stringify(body),
   });
   const json = await parseJson(res);
-  if (!res.ok) throw new Error((json.error as string) ?? "Failed to save");
+  ensureOk(res, json, "Failed to save");
   return (json.inserted as number) ?? 1;
 }
 
@@ -42,16 +56,14 @@ export async function updateVocab(
     body: JSON.stringify(patch),
   });
   const json = await parseJson(res);
-  if (!res.ok) throw new Error((json.error as string) ?? "Failed to update");
+  ensureOk(res, json, "Failed to update");
   return json.data as Vocab;
 }
 
 export async function deleteVocab(id: string): Promise<void> {
   const res = await fetch(`/api/vocab/${id}`, { method: "DELETE" });
-  if (!res.ok) {
-    const json = await parseJson(res);
-    throw new Error((json.error as string) ?? "Failed to delete");
-  }
+  const json = await parseJson(res);
+  ensureOk(res, json, "Failed to delete");
 }
 
 export async function importFile(file: File): Promise<VocabInput[]> {
@@ -59,7 +71,7 @@ export async function importFile(file: File): Promise<VocabInput[]> {
   form.append("file", file);
   const res = await fetch("/api/import", { method: "POST", body: form });
   const json = await parseJson(res);
-  if (!res.ok) throw new Error((json.error as string) ?? "Failed to parse file");
+  ensureOk(res, json, "Failed to parse file");
   return json.rows as VocabInput[];
 }
 

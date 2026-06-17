@@ -1,14 +1,17 @@
 import { NextResponse } from "next/server";
-import { supabase, VOCAB_TABLE } from "@/lib/supabase";
+import { requireUser } from "@/lib/supabase/require-user";
 import type { VocabInput } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// GET /api/vocab — list all vocab, newest first.
+// GET /api/vocab — list the signed-in user's vocab, newest first (RLS-scoped).
 export async function GET() {
-  const { data, error } = await supabase
-    .from(VOCAB_TABLE)
+  const auth = await requireUser();
+  if ("response" in auth) return auth.response;
+
+  const { data, error } = await auth.supabase
+    .from("vocab")
     .select("*")
     .order("created_at", { ascending: false });
   if (error) {
@@ -29,8 +32,12 @@ function sanitize(v: Partial<VocabInput>): VocabInput | null {
   };
 }
 
-// POST /api/vocab — create one ({...}) or many ({ rows: [...] }) records.
+// POST /api/vocab — create one ({...}) or many ({ rows: [...] }) records for the
+// signed-in user.
 export async function POST(request: Request) {
+  const auth = await requireUser();
+  if ("response" in auth) return auth.response;
+
   let body: unknown;
   try {
     body = await request.json();
@@ -42,9 +49,12 @@ export async function POST(request: Request) {
     ? ((body as { rows: Partial<VocabInput>[] }).rows)
     : [body as Partial<VocabInput>];
 
+  // Stamp each row with the owner so it satisfies the RLS insert policy
+  // (user_id must equal auth.uid()).
   const rows = incoming
     .map(sanitize)
-    .filter((r): r is VocabInput => r !== null);
+    .filter((r): r is VocabInput => r !== null)
+    .map((r) => ({ ...r, user_id: auth.user.id }));
 
   if (rows.length === 0) {
     return NextResponse.json(
@@ -53,10 +63,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const { data, error } = await supabase
-    .from(VOCAB_TABLE)
-    .insert(rows)
-    .select();
+  const { data, error } = await auth.supabase.from("vocab").insert(rows).select();
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }

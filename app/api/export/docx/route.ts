@@ -1,15 +1,18 @@
 import { NextResponse } from "next/server";
-import { supabase, VOCAB_TABLE } from "@/lib/supabase";
+import { requireUser } from "@/lib/supabase/require-user";
 import { buildDocx } from "@/lib/export-docx";
 import type { Vocab } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// GET /api/export/docx — download the full vocab list as a Word document.
+// GET /api/export/docx — download the signed-in user's vocab list as a Word doc.
 export async function GET() {
-  const { data, error } = await supabase
-    .from(VOCAB_TABLE)
+  const auth = await requireUser();
+  if ("response" in auth) return auth.response;
+
+  const { data, error } = await auth.supabase
+    .from("vocab")
     .select("*")
     .order("created_at", { ascending: false });
   if (error) {

@@ -10,6 +10,7 @@ import Flashcards from "@/components/Flashcards";
 import VocabTable from "@/components/VocabTable";
 import ImportPanel from "@/components/ImportPanel";
 import DictionarySearch from "@/components/DictionarySearch";
+import AccountMenu from "@/components/AccountMenu";
 import { fetchVocab } from "@/lib/api";
 import type { Vocab } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -83,6 +84,7 @@ export default function Home() {
           <p className="ml-auto text-sm whitespace-nowrap text-muted-foreground sm:ml-0">
             {loading ? "Loading…" : `${vocab.length} words`}
           </p>
+          <AccountMenu />
         </div>
       </header>
 
