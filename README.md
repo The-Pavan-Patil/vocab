@@ -7,8 +7,11 @@ A personal Next.js app for studying Japanese vocabulary. Each word has 5 attribu
 - **Accounts** — Supabase email/password auth. Each user has their own private vocab list
   (isolated in the database via Row Level Security). Open sign-up.
 - **Add Vocab** — form to add words.
-- **Flashcards** — front shows Kanji + Romaji; flip / **Show** reveals the English meaning;
-  **Hint** reveals the Marathi tip. Shuffle + category filter + prev/next.
+- **Flashcards (spaced repetition)** — front shows Kanji + Romaji; **I remember** records a
+  confident recall, or flip to reveal the meaning and grade **Got it** / **Forgot**. A
+  science-backed SM-2 scheduler resurfaces forgotten cards frequently and pushes remembered ones
+  to growing intervals. Category filter + Marathi hint. Design notes:
+  [`docs/spaced-repetition.md`](./docs/spaced-repetition.md).
 - **Vocab List** — searchable table of all columns with inline edit & delete.
 - **Export** — download the whole list as **.docx** or **PDF** (kanji + Marathi render correctly
   via embedded Noto fonts).
@@ -55,6 +58,12 @@ Open <http://localhost:3000> → you'll be redirected to **/login**. Create your
 Then enable auth scoping + migrate your existing words: open **SQL Editor**, set the owner email at
 the top of [`supabase/0002_auth_rls.sql`](./supabase/0002_auth_rls.sql), and run it. (It adds
 `user_id`, backfills your existing rows to your account, and turns on RLS + per-user policies.)
+
+### 5. Enable spaced-repetition scheduling
+Open **SQL Editor**, paste [`supabase/0003_srs.sql`](./supabase/0003_srs.sql), and run it (it's
+idempotent). It adds the SM-2 scheduling columns to `vocab` plus an append-only `reviews` log.
+Existing words are treated as new and enter the flashcard rotation immediately. How the scheduler
+works: [`docs/spaced-repetition.md`](./docs/spaced-repetition.md).
 
 ## Import file format
 The first row may be a header. Recognized column names (case-insensitive, any order):

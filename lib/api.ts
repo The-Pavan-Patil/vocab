@@ -1,4 +1,4 @@
-import type { DictDetails, DictEntry, Vocab, VocabInput } from "./types";
+import type { DictDetails, DictEntry, Grade, Vocab, VocabInput } from "./types";
 
 // Thin client-side fetch helpers used by the UI components.
 
@@ -64,6 +64,19 @@ export async function deleteVocab(id: string): Promise<void> {
   const res = await fetch(`/api/vocab/${id}`, { method: "DELETE" });
   const json = await parseJson(res);
   ensureOk(res, json, "Failed to delete");
+}
+
+// Record a flashcard review. The server computes the next schedule and returns
+// the updated card (with its new due_at / interval).
+export async function reviewVocab(id: string, grade: Grade): Promise<Vocab> {
+  const res = await fetch(`/api/vocab/${id}/review`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ grade }),
+  });
+  const json = await parseJson(res);
+  ensureOk(res, json, "Failed to save review");
+  return json.data as Vocab;
 }
 
 export async function importFile(file: File): Promise<VocabInput[]> {

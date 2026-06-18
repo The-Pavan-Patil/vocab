@@ -1,8 +1,22 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { ChevronLeft, ChevronRight, Layers, Lightbulb, Shuffle } from "lucide-react";
-import { CATEGORIES, type Vocab } from "@/lib/types";
+import {
+  Check,
+  Clock,
+  Layers,
+  Lightbulb,
+  RotateCcw,
+  Sparkles,
+  X,
+} from "lucide-react";
+import { CATEGORIES, type Grade, type Vocab } from "@/lib/types";
+import {
+  RELEARN_GAP,
+  buildSession,
+  nextDueAt,
+} from "@/lib/srs";
+import { reviewVocab } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
@@ -22,57 +36,111 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-function shuffled(length: number) {
-  const idx = Array.from({ length }, (_, i) => i);
-  for (let i = idx.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [idx[i], idx[j]] = [idx[j], idx[i]];
-  }
-  return idx;
+const byCategory = (list: Vocab[], cat: string) =>
+  cat === "all" ? list : list.filter((v) => v.category === cat);
+
+// "in 45 min" / "in 3 hours" / "in 2 days" for the caught-up screen.
+function humanizeUntil(ms: number): string {
+  const mins = Math.round(ms / 60_000);
+  if (mins < 60) return `${Math.max(1, mins)} min`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs} hour${hrs === 1 ? "" : "s"}`;
+  const days = Math.round(hrs / 24);
+  return `${days} day${days === 1 ? "" : "s"}`;
 }
 
 export default function Flashcards({ vocab }: { vocab: Vocab[] }) {
   const [category, setCategory] = useState<string>("all");
-  const [nonce, setNonce] = useState(0); // bump to reshuffle
-  const [pos, setPos] = useState(0);
+  const [sessionId, setSessionId] = useState(0); // bump to (re)start a session
+  // Session "clock": React purity forbids Date.now() during render, so we read
+  // the current time once when a session starts and keep it in state.
+  const [now, setNow] = useState(() => Date.now());
+
+  // Local working copy of the vocab. Reviews update due dates here so a *new*
+  // session (Study again) correctly excludes cards we just pushed into the
+  // future — without forcing a full reload of the parent's list mid-session.
+  const [cards, setCards] = useState<Vocab[]>(vocab);
+  const [prevVocab, setPrevVocab] = useState(vocab);
+
+  const [remaining, setRemaining] = useState<Vocab[]>(() =>
+    buildSession(byCategory(vocab, "all"), Date.now())
+  );
+  const [stats, setStats] = useState({ remember: 0, right: 0, wrong: 0 });
   const [flipped, setFlipped] = useState(false);
   const [showHint, setShowHint] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const deck = useMemo(
-    () =>
-      category === "all" ? vocab : vocab.filter((v) => v.category === category),
-    [vocab, category]
+  // (Re)build the session whenever the source list, category, or session id
+  // changes. New identity on any dep change → triggers the render-time reset
+  // below (the repo's "you might not need an effect" pattern).
+  const sessionToken = useMemo(
+    () => ({}),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [vocab, category, sessionId]
   );
-
-  // Derive the shuffled order; `nonce` is an intentional invalidation key so
-  // that bumping it (via the Shuffle button) recomputes a fresh order.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const order = useMemo(() => shuffled(deck.length), [deck, nonce]);
-
-  // Reset the transient view state when the order changes — done during
-  // render (not in an effect) per the "you might not need an effect" pattern.
-  const [prevOrder, setPrevOrder] = useState(order);
-  if (prevOrder !== order) {
-    setPrevOrder(order);
-    setPos(0);
+  const [prevToken, setPrevToken] = useState(sessionToken);
+  if (prevToken !== sessionToken) {
+    setPrevToken(sessionToken);
+    const vocabChanged = prevVocab !== vocab;
+    // When the parent reloads its list, resync our working copy and study the
+    // fresh data; otherwise keep our locally-updated schedules.
+    const source = vocabChanged ? vocab : cards;
+    if (vocabChanged) {
+      setPrevVocab(vocab);
+      setCards(vocab);
+    }
+    setRemaining(buildSession(byCategory(source, category), now));
+    setStats({ remember: 0, right: 0, wrong: 0 });
     setFlipped(false);
     setShowHint(false);
+    setError(null);
   }
 
-  const reset = () => setNonce((n) => n + 1);
+  const card = remaining[0];
+  const reviewedCount = stats.remember + stats.right + stats.wrong;
 
-  const card = deck[order[pos]];
+  // (Re)start a session against the latest schedules / a fresh clock. Runs in an
+  // event handler, so reading Date.now() here is allowed.
+  function restart() {
+    setNow(Date.now());
+    setSessionId((n) => n + 1);
+  }
+  function changeCategory(next: string) {
+    setNow(Date.now());
+    setCategory(next);
+  }
 
-  function go(delta: number) {
-    if (deck.length === 0) return;
+  // Grade the current card. Advances optimistically (snappy), then persists in
+  // the background — the server is the source of truth for the next interval.
+  async function grade(g: Grade) {
+    const cur = remaining[0];
+    if (!cur) return;
+    setStats((s) => ({ ...s, [g]: s[g] + 1 }));
     setFlipped(false);
     setShowHint(false);
-    setPos((p) => (p + delta + deck.length) % deck.length);
+    setError(null);
+    setRemaining((r) => {
+      const rest = r.slice(1);
+      if (g === "wrong") {
+        // Lapse: bring it back later in this same session so it's drilled until
+        // it sticks (within-session "learning step"), in addition to its
+        // server-side due date.
+        const at = Math.min(RELEARN_GAP, rest.length);
+        rest.splice(at, 0, cur);
+      }
+      return rest;
+    });
+    try {
+      const updated = await reviewVocab(cur.id, g);
+      setCards((cs) => cs.map((c) => (c.id === updated.id ? updated : c)));
+    } catch (e) {
+      setError((e as Error).message);
+    }
   }
 
-  // Keyboard shortcuts: ←/→ navigate, Space/Enter flip, H toggles the hint.
-  // All state updates happen inside the listener callback (never synchronously
-  // in the effect body) so the repo's set-state-in-effect rule stays satisfied.
+  // Keyboard: not flipped → Space/Enter flips, R = Remember. Flipped → ←/1 =
+  // Forgot, →/2 = Got it, Space flips back. H toggles the Marathi hint.
+  // Re-binds on flip / queue change so the closure over `grade` stays fresh.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       const t = e.target as HTMLElement | null;
@@ -85,31 +153,36 @@ export default function Flashcards({ vocab }: { vocab: Vocab[] }) {
       ) {
         return; // don't hijack the category select, nav, or any text field
       }
-      if (deck.length === 0) return;
-      switch (e.key) {
-        case "ArrowLeft":
+      if (remaining.length === 0) return;
+      if (e.key === "h" || e.key === "H") {
+        setShowHint((s) => !s);
+        return;
+      }
+      if (!flipped) {
+        if (e.key === " " || e.key === "Enter") {
           e.preventDefault();
-          go(-1);
-          break;
-        case "ArrowRight":
+          setFlipped(true);
+        } else if (e.key === "r" || e.key === "R") {
           e.preventDefault();
-          go(1);
-          break;
-        case " ":
-        case "Enter":
+          grade("remember");
+        }
+      } else {
+        if (e.key === "ArrowLeft" || e.key === "1") {
           e.preventDefault();
-          setFlipped((f) => !f);
-          break;
-        case "h":
-        case "H":
-          setShowHint((s) => !s);
-          break;
+          grade("wrong");
+        } else if (e.key === "ArrowRight" || e.key === "2") {
+          e.preventDefault();
+          grade("right");
+        } else if (e.key === " ") {
+          e.preventDefault();
+          setFlipped(false);
+        }
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deck.length]);
+  }, [flipped, remaining]);
 
   if (vocab.length === 0) {
     return (
@@ -127,10 +200,12 @@ export default function Flashcards({ vocab }: { vocab: Vocab[] }) {
     );
   }
 
+  const categoryCount = byCategory(cards, category).length;
+
   return (
     <div className="mx-auto flex max-w-xl flex-col gap-5">
       <div className="flex items-center justify-between gap-3">
-        <Select value={category} onValueChange={setCategory}>
+        <Select value={category} onValueChange={changeCategory}>
           <SelectTrigger className="w-48">
             <SelectValue />
           </SelectTrigger>
@@ -145,9 +220,20 @@ export default function Flashcards({ vocab }: { vocab: Vocab[] }) {
             </SelectGroup>
           </SelectContent>
         </Select>
+        {reviewedCount > 0 && (
+          <span className="text-sm text-muted-foreground">
+            {reviewedCount} reviewed
+          </span>
+        )}
       </div>
 
-      {deck.length === 0 || !card ? (
+      {error && (
+        <div className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          Couldn’t save that review: {error}
+        </div>
+      )}
+
+      {categoryCount === 0 ? (
         <Empty>
           <EmptyHeader>
             <EmptyTitle>No cards in this category</EmptyTitle>
@@ -156,113 +242,133 @@ export default function Flashcards({ vocab }: { vocab: Vocab[] }) {
             </EmptyDescription>
           </EmptyHeader>
         </Empty>
+      ) : !card ? (
+        // Queue is empty: either we just finished a run, or nothing is due yet.
+        <CaughtUp
+          reviewed={reviewedCount}
+          stats={stats}
+          nextInMs={(() => {
+            const next = nextDueAt(byCategory(cards, category), now);
+            return next == null ? null : next - now;
+          })()}
+          onRestart={restart}
+        />
       ) : (
         <>
-          {/* Big study surface. Three invisible zones tile the width:
-              left = previous · centre = flip · right = next. */}
-          <div className="relative">
-            <Card className="relative flex h-64 select-none flex-col items-center justify-center gap-3 overflow-hidden px-6 text-center sm:h-80 lg:h-96">
-              {/* Centred content paints above the zones but ignores clicks. */}
-              <div className="pointer-events-none relative z-10 flex flex-col items-center gap-3">
-                {!flipped ? (
-                  <>
-                    <div className="jp text-6xl leading-tight font-medium break-words sm:text-7xl lg:text-8xl">
-                      {card.kanji}
+          {/* Study surface — tap anywhere on the card to flip. */}
+          <button
+            type="button"
+            onClick={() => setFlipped((f) => !f)}
+            aria-label={flipped ? "Show word" : "Flip to answer"}
+            className="block w-full focus-visible:outline-none"
+          >
+            <Card className="relative flex h-64 cursor-pointer select-none flex-col items-center justify-center gap-3 overflow-hidden px-6 text-center transition-colors hover:border-primary/40 sm:h-80 lg:h-96">
+              {!flipped ? (
+                <>
+                  <div className="jp text-6xl leading-tight font-medium break-words sm:text-7xl lg:text-8xl">
+                    {card.kanji}
+                  </div>
+                  {card.romaji && (
+                    <div className="text-xl text-muted-foreground sm:text-2xl">
+                      {card.romaji}
                     </div>
-                    {card.romaji && (
-                      <div className="text-xl text-muted-foreground sm:text-2xl">
-                        {card.romaji}
-                      </div>
-                    )}
-                    <div className="mt-2 text-xs tracking-wide text-muted-foreground/60 uppercase">
-                      Tap centre to flip
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <div className="text-4xl font-medium break-words sm:text-5xl">
-                      {card.english || "—"}
-                    </div>
-                    {card.category && (
-                      <Badge variant="secondary">{card.category}</Badge>
-                    )}
-                  </>
-                )}
-              </div>
-
-              {/* LEFT zone — previous */}
-              <button
-                type="button"
-                aria-label="Previous word"
-                onClick={() => go(-1)}
-                className="group/zone absolute inset-y-0 left-0 z-0 w-1/4 cursor-pointer focus-visible:outline-none"
-              >
-                <ChevronLeft
-                  aria-hidden
-                  className="absolute top-1/2 left-3 size-7 -translate-y-1/2 text-muted-foreground/25 transition-colors group-hover/zone:text-muted-foreground/70 group-focus-visible/zone:text-muted-foreground/70 motion-reduce:transition-none"
-                />
-              </button>
-
-              {/* CENTRE zone — flip */}
-              <button
-                type="button"
-                aria-label={flipped ? "Show word" : "Flip to answer"}
-                onClick={() => setFlipped((f) => !f)}
-                className="absolute inset-y-0 left-1/4 z-0 w-1/2 cursor-pointer focus-visible:outline-none"
-              />
-
-              {/* RIGHT zone — next */}
-              <button
-                type="button"
-                aria-label="Next word"
-                onClick={() => go(1)}
-                className="group/zone absolute inset-y-0 right-0 z-0 w-1/4 cursor-pointer focus-visible:outline-none"
-              >
-                <ChevronRight
-                  aria-hidden
-                  className="absolute top-1/2 right-3 size-7 -translate-y-1/2 text-muted-foreground/25 transition-colors group-hover/zone:text-muted-foreground/70 group-focus-visible/zone:text-muted-foreground/70 motion-reduce:transition-none"
-                />
-              </button>
+                  )}
+                  <div className="mt-2 text-xs tracking-wide text-muted-foreground/60 uppercase">
+                    Tap to flip
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="text-4xl font-medium break-words sm:text-5xl">
+                    {card.english || "—"}
+                  </div>
+                  {card.category && (
+                    <Badge variant="secondary">{card.category}</Badge>
+                  )}
+                  <div className="mt-2 text-xs tracking-wide text-muted-foreground/60 uppercase">
+                    {card.kanji}
+                  </div>
+                </>
+              )}
             </Card>
+          </button>
 
-            <span className="sr-only" aria-live="polite">
-              {flipped
-                ? `Answer: ${card.english || "no English meaning"}`
-                : `Word ${pos + 1} of ${deck.length}: ${card.kanji}`}
-            </span>
-          </div>
+          <span className="sr-only" aria-live="polite">
+            {flipped
+              ? `Answer: ${card.english || "no English meaning"}`
+              : `Word: ${card.kanji}. ${remaining.length} left in this session.`}
+          </span>
 
-          {/* Progress */}
+          {/* Grade buttons. Front: a single confident "Remember". Flipped: the
+              Forgot / Got-it split — so a flip done just to confirm (Got it)
+              counts as a pass, while a real lapse (Forgot) reschedules soon. */}
+          {!flipped ? (
+            <div className="flex flex-col items-center gap-2">
+              <Button
+                size="lg"
+                className="w-full max-w-xs gap-2"
+                onClick={() => grade("remember")}
+              >
+                <Check aria-hidden /> I remember
+              </Button>
+              <p className="text-xs text-muted-foreground">
+                Not sure? Tap the card to reveal the meaning.
+              </p>
+            </div>
+          ) : (
+            <div className="flex flex-col items-center gap-2">
+              <div className="grid w-full max-w-xs grid-cols-2 gap-2">
+                <Button
+                  size="lg"
+                  variant="outline"
+                  className="gap-2 border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                  onClick={() => grade("wrong")}
+                >
+                  <X aria-hidden /> Forgot
+                </Button>
+                <Button size="lg" className="gap-2" onClick={() => grade("right")}>
+                  <Check aria-hidden /> Got it
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                “Got it” if you actually knew it · “Forgot” to see it again soon
+              </p>
+            </div>
+          )}
+
+          {/* Progress: how far through the current session. */}
           <div className="flex flex-col items-center gap-1.5">
             <div
               className="h-1 w-full overflow-hidden rounded-full bg-muted"
               role="progressbar"
-              aria-valuemin={1}
-              aria-valuemax={deck.length}
-              aria-valuenow={pos + 1}
-              aria-label="Flashcard progress"
+              aria-valuemin={0}
+              aria-valuemax={reviewedCount + remaining.length}
+              aria-valuenow={reviewedCount}
+              aria-label="Session progress"
             >
               <div
                 className="h-full rounded-full bg-primary transition-[width] duration-300 motion-reduce:transition-none"
-                style={{ width: `${((pos + 1) / deck.length) * 100}%` }}
+                style={{
+                  width: `${
+                    (reviewedCount / (reviewedCount + remaining.length)) * 100
+                  }%`,
+                }}
               />
             </div>
             <span className="text-xs text-muted-foreground">
-              Card {pos + 1} of {deck.length}
+              {remaining.length} left in this session
             </span>
           </div>
 
-          {/* Controls — fixed position. The hint is rendered BELOW so toggling
-              it never shifts the Hint button. Navigating cards hides the hint. */}
+          {/* Controls: restart the session · toggle the Marathi hint. */}
           <div className="flex items-center justify-center gap-2">
             <Button
               variant="ghost"
               size="icon-lg"
-              onClick={reset}
-              disabled={deck.length === 0}
-              aria-label="Shuffle deck"
+              onClick={restart}
+              aria-label="Restart session"
             >
-              <Shuffle aria-hidden />
+              <RotateCcw aria-hidden />
             </Button>
             <Button
               variant="ghost"
@@ -276,7 +382,6 @@ export default function Flashcards({ vocab }: { vocab: Vocab[] }) {
             </Button>
           </div>
 
-          {/* Marathi hint, revealed below the controls. */}
           {showHint && (
             <div className="rounded-xl border border-accent bg-accent/40 px-4 py-3 text-center text-accent-foreground">
               <span className="mr-2 text-xs tracking-wide uppercase opacity-80">
@@ -288,5 +393,51 @@ export default function Flashcards({ vocab }: { vocab: Vocab[] }) {
         </>
       )}
     </div>
+  );
+}
+
+// Shown when the session queue empties — either a finished run (with a recap)
+// or "nothing due yet" with the time until the next review.
+function CaughtUp({
+  reviewed,
+  stats,
+  nextInMs,
+  onRestart,
+}: {
+  reviewed: number;
+  stats: { remember: number; right: number; wrong: number };
+  nextInMs: number | null;
+  onRestart: () => void;
+}) {
+  const finished = reviewed > 0;
+  return (
+    <Empty className="mx-auto max-w-xl">
+      <EmptyHeader>
+        <EmptyMedia variant="icon">
+          {finished ? <Sparkles /> : <Clock />}
+        </EmptyMedia>
+        <EmptyTitle>
+          {finished ? "Session complete" : "All caught up"}
+        </EmptyTitle>
+        <EmptyDescription>
+          {finished ? (
+            <>
+              {stats.remember + stats.right} recalled
+              {stats.wrong > 0 ? ` · ${stats.wrong} to revisit` : ""}.
+              {nextInMs != null && (
+                <> Next review in {humanizeUntil(nextInMs)}.</>
+              )}
+            </>
+          ) : nextInMs != null ? (
+            <>Nothing due right now. Next review in {humanizeUntil(nextInMs)}.</>
+          ) : (
+            <>Nothing due right now. Add more words to keep studying.</>
+          )}
+        </EmptyDescription>
+      </EmptyHeader>
+      <Button variant="outline" className="gap-2" onClick={onRestart}>
+        <RotateCcw aria-hidden /> Study again
+      </Button>
+    </Empty>
   );
 }

@@ -6,7 +6,20 @@ export type Vocab = {
   tips: string | null; // Marathi meaning / mnemonic
   category: string | null;
   created_at: string;
+  // Spaced-repetition state (see lib/srs.ts + docs/spaced-repetition.md).
+  // Populated by `select("*")` once migration 0003 has run; on a pre-migration
+  // database these arrive undefined and the scheduler treats the card as new.
+  ease: number;
+  interval_days: number;
+  reps: number;
+  lapses: number;
+  state: "new" | "review" | "relearning";
+  due_at: string | null;
+  last_reviewed_at: string | null;
 };
+
+// Re-export the SRS grade so UI code can import it from one place.
+export type { Grade } from "./srs";
 
 // A row that has not yet been persisted (no id / created_at).
 export type VocabInput = {
