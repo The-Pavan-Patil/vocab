@@ -120,7 +120,7 @@ export default function ImportPanel({
     if (newCount === 0) return;
     setBusy(true);
     try {
-      const n = await createVocab(newRows);
+      const { inserted: n } = await createVocab(newRows);
       toast.success(`Imported ${n} new word${n === 1 ? "" : "s"}`);
       setRows((rs) => {
         const remaining = (rs ?? []).filter((r) => dupFor(r));

@@ -119,8 +119,12 @@ export default function DictionarySearch({ onAdded }: { onAdded: () => void }) {
     if (!draft) return;
     setSaving(true);
     try {
-      await createVocab(draft);
-      toast.success("Added to vocab list", { description: draft.kanji });
+      const { inserted } = await createVocab(draft);
+      if (inserted) {
+        toast.success("Added to vocab list", { description: draft.kanji });
+      } else {
+        toast.info("Already in your list", { description: draft.kanji });
+      }
       setDraft(null);
       onAdded();
     } catch (err) {

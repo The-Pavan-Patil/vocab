@@ -54,10 +54,15 @@ export default function AddVocabForm({ onAdded }: { onAdded: () => void }) {
     setInvalid(false);
     setSaving(true);
     try {
-      await createVocab(form);
-      setForm({ ...EMPTY, category: form.category });
-      toast.success("Saved", { description: "Added to your vocab list." });
-      onAdded();
+      const { inserted } = await createVocab(form);
+      if (inserted) {
+        setForm({ ...EMPTY, category: form.category });
+        toast.success("Saved", { description: "Added to your vocab list." });
+        onAdded();
+      } else {
+        // Same word is already saved — keep the form so it can be tweaked.
+        toast.info("Already in your list", { description: form.kanji });
+      }
     } catch (e) {
       toast.error("Couldn’t save", { description: (e as Error).message });
     } finally {
