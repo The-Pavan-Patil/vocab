@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { Activity, useCallback, useEffect, useState } from "react";
 import { PencilLine, Layers, List, Upload, BookOpen } from "lucide-react";
 import { Tabs as TabsPrimitive } from "radix-ui";
 import { TabsContent } from "@/components/ui/tabs";
@@ -99,27 +99,36 @@ export default function Home() {
           </Alert>
         )}
 
-        <TabsContent value="add">
-          <AddVocabForm onAdded={reload} />
+        {/* Every panel stays mounted (forceMount) and is shown/hidden via
+            React's <Activity>, so each tab keeps its in-progress state when you
+            switch away — the flashcard session, a dictionary search, a half-typed
+            word, import preview rows. Activity also runs effect cleanup on hide
+            (e.g. Flashcards' keyboard listener detaches), so it doesn't leak
+            across tabs the way a plain always-mounted panel would. */}
+        <TabsContent value="add" forceMount>
+          <Activity mode={tab === "add" ? "visible" : "hidden"}>
+            <AddVocabForm onAdded={reload} />
+          </Activity>
         </TabsContent>
-        <TabsContent value="dictionary">
-          <DictionarySearch onAdded={reload} />
+        <TabsContent value="dictionary" forceMount>
+          <Activity mode={tab === "dictionary" ? "visible" : "hidden"}>
+            <DictionarySearch onAdded={reload} />
+          </Activity>
         </TabsContent>
-        <TabsContent value="flashcards">
-          <Flashcards vocab={vocab} />
+        <TabsContent value="flashcards" forceMount>
+          <Activity mode={tab === "flashcards" ? "visible" : "hidden"}>
+            <Flashcards vocab={vocab} />
+          </Activity>
         </TabsContent>
-        <TabsContent value="list">
-          <VocabTable vocab={vocab} onChanged={reload} />
+        <TabsContent value="list" forceMount>
+          <Activity mode={tab === "list" ? "visible" : "hidden"}>
+            <VocabTable vocab={vocab} onChanged={reload} />
+          </Activity>
         </TabsContent>
-        {/* forceMount keeps the Import panel (and any in-progress upload /
-            edits) alive when you switch tabs — e.g. to check a word in the
-            Dictionary — instead of unmounting and losing the work. */}
-        <TabsContent
-          value="import"
-          forceMount
-          className="data-[state=inactive]:hidden"
-        >
-          <ImportPanel vocab={vocab} onImported={reload} />
+        <TabsContent value="import" forceMount>
+          <Activity mode={tab === "import" ? "visible" : "hidden"}>
+            <ImportPanel vocab={vocab} onImported={reload} />
+          </Activity>
         </TabsContent>
       </main>
 
