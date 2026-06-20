@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useLayoutEffect, useState } from "react";
 import { toast } from "sonner";
 import { BookOpen, ChevronDown, Loader2, Plus, Search } from "lucide-react";
 import { createVocab, fetchDictionaryDetails, searchDictionary } from "@/lib/api";
@@ -73,6 +73,12 @@ export default function DictionarySearch({ onAdded }: { onAdded: () => void }) {
   // Add-to-vocab dialog.
   const [draft, setDraft] = useState<VocabInput | null>(null);
   const [saving, setSaving] = useState(false);
+
+  // Close the Add dialog when this tab is hidden by <Activity>. The dialog
+  // renders into a portal on document.body — outside the Activity boundary — so
+  // display:none on the panel wouldn't hide it otherwise. Activity runs this
+  // cleanup on hide.
+  useLayoutEffect(() => () => setDraft(null), []);
 
   async function runSearch(e: React.FormEvent) {
     e.preventDefault();
