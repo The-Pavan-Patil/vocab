@@ -12,8 +12,10 @@ import {
 } from "lucide-react";
 import { CATEGORIES, type Grade, type Vocab } from "@/lib/types";
 import {
+  NEW_CARDS_PER_SESSION,
   RELEARN_GAP,
   buildSession,
+  isNew,
   nextDueAt,
 } from "@/lib/srs";
 import { reviewVocab } from "@/lib/api";
@@ -108,6 +110,23 @@ export default function Flashcards({ vocab }: { vocab: Vocab[] }) {
   function changeCategory(next: string) {
     setNow(Date.now());
     setCategory(next);
+  }
+
+  // New cards in this category that aren't already in the queue — the pool we
+  // can pull from to grow the session past the initial new-card cap.
+  const queuedIds = new Set(remaining.map((c) => c.id));
+  const availableNew = byCategory(cards, category).filter(
+    (c) => isNew(c) && !queuedIds.has(c.id)
+  ).length;
+
+  // Pull the next batch of new cards into the live queue — grows the current
+  // run ("increase the session"), or resumes after finishing ("keep going").
+  function addMore() {
+    const more = byCategory(cards, category)
+      .filter((c) => isNew(c) && !queuedIds.has(c.id))
+      .slice(0, NEW_CARDS_PER_SESSION);
+    if (more.length === 0) return;
+    setRemaining((r) => [...r, ...more]);
   }
 
   // Grade the current card. Advances optimistically (snappy), then persists in
@@ -251,7 +270,9 @@ export default function Flashcards({ vocab }: { vocab: Vocab[] }) {
             const next = nextDueAt(byCategory(cards, category), now);
             return next == null ? null : next - now;
           })()}
+          availableNew={availableNew}
           onRestart={restart}
+          onStudyMore={addMore}
         />
       ) : (
         <>
@@ -358,6 +379,17 @@ export default function Flashcards({ vocab }: { vocab: Vocab[] }) {
             <span className="text-xs text-muted-foreground">
               {remaining.length} left in this session
             </span>
+            {availableNew > 0 && (
+              <Button
+                variant="link"
+                size="sm"
+                className="h-auto p-0 text-xs"
+                onClick={addMore}
+              >
+                Add {Math.min(NEW_CARDS_PER_SESSION, availableNew)} more ·{" "}
+                {availableNew} new waiting
+              </Button>
+            )}
           </div>
 
           {/* Controls: restart the session · toggle the Marathi hint. */}
@@ -402,14 +434,19 @@ function CaughtUp({
   reviewed,
   stats,
   nextInMs,
+  availableNew,
   onRestart,
+  onStudyMore,
 }: {
   reviewed: number;
   stats: { remember: number; right: number; wrong: number };
   nextInMs: number | null;
+  availableNew: number;
   onRestart: () => void;
+  onStudyMore: () => void;
 }) {
   const finished = reviewed > 0;
+  const moreBatch = Math.min(NEW_CARDS_PER_SESSION, availableNew);
   return (
     <Empty className="mx-auto max-w-xl">
       <EmptyHeader>
@@ -420,24 +457,33 @@ function CaughtUp({
           {finished ? "Session complete" : "All caught up"}
         </EmptyTitle>
         <EmptyDescription>
-          {finished ? (
+          {finished && (
             <>
               {stats.remember + stats.right} recalled
-              {stats.wrong > 0 ? ` · ${stats.wrong} to revisit` : ""}.
-              {nextInMs != null && (
-                <> Next review in {humanizeUntil(nextInMs)}.</>
-              )}
+              {stats.wrong > 0 ? ` · ${stats.wrong} revisited` : ""}.{" "}
+            </>
+          )}
+          {availableNew > 0 ? (
+            <>
+              {availableNew} new card{availableNew === 1 ? "" : "s"} still
+              waiting.
             </>
           ) : nextInMs != null ? (
-            <>Nothing due right now. Next review in {humanizeUntil(nextInMs)}.</>
+            <>Next review in {humanizeUntil(nextInMs)}.</>
           ) : (
-            <>Nothing due right now. Add more words to keep studying.</>
+            <>Add more words to keep studying.</>
           )}
         </EmptyDescription>
       </EmptyHeader>
-      <Button variant="outline" className="gap-2" onClick={onRestart}>
-        <RotateCcw aria-hidden /> Study again
-      </Button>
+      {availableNew > 0 ? (
+        <Button className="gap-2" onClick={onStudyMore}>
+          <Sparkles aria-hidden /> Study {moreBatch} more
+        </Button>
+      ) : (
+        <Button variant="outline" className="gap-2" onClick={onRestart}>
+          <RotateCcw aria-hidden /> Study again
+        </Button>
+      )}
     </Empty>
   );
 }

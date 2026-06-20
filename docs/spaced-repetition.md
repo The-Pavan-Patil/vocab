@@ -127,6 +127,13 @@ then up to `NEW_CARDS_PER_SESSION` brand-new cards. Cards due in the future are
 excluded — that's the "all caught up" state, which shows the time until the next
 review via `nextDueAt()`.
 
+The `NEW_CARDS_PER_SESSION` cap applies to **new** cards only (overdue reviews
+are never capped — you should always clear what you've already learned). It's a
+soft cap: the UI surfaces an **"Add N more"** action mid-session and a **"Study
+N more"** button on the completion screen, both of which append the next batch
+of new cards to the live queue (without resetting the running tally). So the cap
+controls the *default* batch size, not a hard ceiling.
+
 ---
 
 ## 4. Data model & flow
