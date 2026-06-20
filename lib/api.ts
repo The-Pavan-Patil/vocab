@@ -32,9 +32,11 @@ export async function fetchVocab(): Promise<Vocab[]> {
   return json.data as Vocab[];
 }
 
+// Returns how many rows were actually created vs. skipped as already-present
+// duplicates (the server dedups on kanji), so callers can phrase their toast.
 export async function createVocab(
   rows: VocabInput | VocabInput[]
-): Promise<number> {
+): Promise<{ inserted: number; skipped: number }> {
   const body = Array.isArray(rows) ? { rows } : rows;
   const res = await fetch("/api/vocab", {
     method: "POST",
@@ -43,7 +45,10 @@ export async function createVocab(
   });
   const json = await parseJson(res);
   ensureOk(res, json, "Failed to save");
-  return (json.inserted as number) ?? 1;
+  return {
+    inserted: (json.inserted as number) ?? 0,
+    skipped: (json.skipped as number) ?? 0,
+  };
 }
 
 export async function updateVocab(
