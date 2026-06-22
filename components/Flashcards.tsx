@@ -54,6 +54,11 @@ function humanizeUntil(ms: number): string {
 export default function Flashcards({ vocab }: { vocab: Vocab[] }) {
   const [category, setCategory] = useState<string>("all");
   const [sessionId, setSessionId] = useState(0); // bump to (re)start a session
+  // "Study again" / restart re-studies cards we just pushed into the future — a
+  // cram pass that ignores due dates so the user can go again immediately, not
+  // tomorrow. A normal (re)build (mount, category switch, parent reload) still
+  // respects the schedule. restart() sets this; the rebuild below reads it.
+  const [cram, setCram] = useState(false);
   // Session "clock": React purity forbids Date.now() during render, so we read
   // the current time once when a session starts and keep it in state.
   const [now, setNow] = useState(() => Date.now());
@@ -91,7 +96,14 @@ export default function Flashcards({ vocab }: { vocab: Vocab[] }) {
       setPrevVocab(vocab);
       setCards(vocab);
     }
-    setRemaining(buildSession(byCategory(source, category), now));
+    // A parent reload always restudies the fresh due data (never a cram);
+    // restart() sets `cram` to re-include cards we just scheduled ahead.
+    setRemaining(
+      buildSession(byCategory(source, category), now, {
+        cram: cram && !vocabChanged,
+      })
+    );
+    setCram(false);
     setStats({ remember: 0, right: 0, wrong: 0 });
     setFlipped(false);
     setShowHint(false);
@@ -105,6 +117,7 @@ export default function Flashcards({ vocab }: { vocab: Vocab[] }) {
   // event handler, so reading Date.now() here is allowed.
   function restart() {
     setNow(Date.now());
+    setCram(true); // re-study now, ignoring due dates (see buildSession cram)
     setSessionId((n) => n + 1);
   }
   function changeCategory(next: string) {
