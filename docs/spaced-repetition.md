@@ -127,6 +127,13 @@ then up to `NEW_CARDS_PER_SESSION` brand-new cards. Cards due in the future are
 excluded — that's the "all caught up" state, which shows the time until the next
 review via `nextDueAt()`.
 
+**Study again (cram).** "All caught up" is the *default* state, not a lockout.
+The **"Study again"** button (and the restart control) call `buildSession()` with
+`cram: true`, which drops the due-date filter and re-includes every reviewed card
+right now — so you can run the deck again immediately instead of waiting for the
+schedule. Cram is a practice pass *over* the schedule, not a bypass: grading a
+crammed card still records a real review and moves its `due_at` as usual.
+
 The `NEW_CARDS_PER_SESSION` cap applies to **new** cards only (overdue reviews
 are never capped — you should always clear what you've already learned). It's a
 soft cap: the UI surfaces an **"Add N more"** action mid-session and a **"Study

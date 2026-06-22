@@ -185,17 +185,25 @@ export function isDue(card: Schedulable, now: number): boolean {
  * Build the ordered study queue: every overdue review (most overdue first)
  * followed by up to `newLimit` brand-new cards. Cards whose next review is in
  * the future are excluded — that's the "all caught up" case.
+ *
+ * Pass `cram: true` to re-study NOW, ignoring due dates: every reviewed card is
+ * included regardless of when it's next due. This backs the "Study again" /
+ * restart path — the user explicitly asked to practice again, so we don't make
+ * them wait for the schedule. Cram is a practice pass *over* the schedule, not
+ * a bypass of it: grading a crammed card still records a real review and moves
+ * its due date as usual.
  */
 export function buildSession<T extends Schedulable>(
   cards: T[],
   now: number,
-  newLimit = NEW_CARDS_PER_SESSION
+  opts: { newLimit?: number; cram?: boolean } = {}
 ): T[] {
+  const { newLimit = NEW_CARDS_PER_SESSION, cram = false } = opts;
   const due: T[] = [];
   const fresh: T[] = [];
   for (const c of cards) {
     if (isNew(c)) fresh.push(c);
-    else if (isDue(c, now)) due.push(c);
+    else if (cram || isDue(c, now)) due.push(c);
   }
   due.sort((a, b) => dueTime(a) - dueTime(b));
   return [...due, ...fresh.slice(0, newLimit)];
