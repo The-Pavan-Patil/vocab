@@ -39,9 +39,12 @@ import {
 } from "@/components/ui/dialog";
 import {
   Field,
+  FieldContent,
+  FieldDescription,
   FieldGroup,
   FieldLabel,
 } from "@/components/ui/field";
+import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -405,6 +408,23 @@ export default function DictionarySearch({ onAdded }: { onAdded: () => void }) {
                     </SelectGroup>
                   </SelectContent>
                 </Select>
+              </Field>
+              <Field orientation="horizontal">
+                <FieldContent>
+                  <FieldLabel htmlFor="d-study-kanji">
+                    Also study as Kanji
+                  </FieldLabel>
+                  <FieldDescription>
+                    Adds a kanji-only card to the Kanji tab.
+                  </FieldDescription>
+                </FieldContent>
+                <Switch
+                  id="d-study-kanji"
+                  checked={draft.study_as_kanji ?? false}
+                  onCheckedChange={(v) =>
+                    setDraft((d) => (d ? { ...d, study_as_kanji: v } : d))
+                  }
+                />
               </Field>
             </FieldGroup>
           )}

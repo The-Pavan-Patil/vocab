@@ -15,11 +15,13 @@ import {
 } from "@/components/ui/card";
 import {
   Field,
+  FieldContent,
   FieldDescription,
   FieldError,
   FieldGroup,
   FieldLabel,
 } from "@/components/ui/field";
+import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -35,6 +37,7 @@ const EMPTY: VocabInput = {
   english: "",
   tips: "",
   category: "noun",
+  study_as_kanji: false,
 };
 
 export default function AddVocabForm({ onAdded }: { onAdded: () => void }) {
@@ -152,6 +155,25 @@ export default function AddVocabForm({ onAdded }: { onAdded: () => void }) {
                   </SelectGroup>
                 </SelectContent>
               </Select>
+            </Field>
+
+            <Field orientation="horizontal">
+              <FieldContent>
+                <FieldLabel htmlFor="study_as_kanji">
+                  Also study as Kanji
+                </FieldLabel>
+                <FieldDescription>
+                  Adds a kanji-only card (no reading shown) to the Kanji tab,
+                  with its own review schedule.
+                </FieldDescription>
+              </FieldContent>
+              <Switch
+                id="study_as_kanji"
+                checked={form.study_as_kanji ?? false}
+                onCheckedChange={(v) =>
+                  setForm((f) => ({ ...f, study_as_kanji: v }))
+                }
+              />
             </Field>
 
             <Button

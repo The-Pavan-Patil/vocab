@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Check, Download, Pencil, Search, Trash2, X } from "lucide-react";
+import { Check, Download, Languages, Pencil, Search, Trash2, X } from "lucide-react";
 import { deleteVocab, updateVocab } from "@/lib/api";
 import { CATEGORIES, COLUMNS, type Vocab, type VocabInput } from "@/lib/types";
 import { Button } from "@/components/ui/button";
@@ -35,6 +35,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Switch } from "@/components/ui/switch";
 
 export default function VocabTable({
   vocab,
@@ -68,6 +69,7 @@ export default function VocabTable({
       english: v.english ?? "",
       tips: v.tips ?? "",
       category: v.category ?? "",
+      study_as_kanji: v.study_as_kanji ?? false,
     });
   }
 
@@ -182,6 +184,7 @@ export default function VocabTable({
                 {COLUMNS.map((c) => (
                   <TableHead key={c.key}>{c.label}</TableHead>
                 ))}
+                <TableHead className="w-16 text-center">Kanji</TableHead>
                 <TableHead className="w-24 text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -222,6 +225,16 @@ export default function VocabTable({
                         )}
                       </TableCell>
                     ))}
+                    <TableCell className="align-top text-center">
+                      <Switch
+                        aria-label="Study as Kanji"
+                        className="mt-2"
+                        checked={draft.study_as_kanji ?? false}
+                        onCheckedChange={(val) =>
+                          setDraft({ ...draft, study_as_kanji: val })
+                        }
+                      />
+                    </TableCell>
                     <TableCell className="text-right align-top">
                       <div className="flex justify-end gap-1">
                         <Button
@@ -256,6 +269,14 @@ export default function VocabTable({
                     <TableCell>
                       {v.category && (
                         <Badge variant="secondary">{v.category}</Badge>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-center">
+                      {v.study_as_kanji && (
+                        <Languages
+                          className="mx-auto size-4 text-primary"
+                          aria-label="In the Kanji deck"
+                        />
                       )}
                     </TableCell>
                     <TableCell className="text-right">

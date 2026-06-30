@@ -3,8 +3,12 @@ import * as XLSX from "xlsx";
 import mammoth from "mammoth";
 import type { VocabInput } from "./types";
 
+// The text columns an import file can carry. `study_as_kanji` is a UI toggle, not
+// an importable cell, so it's excluded from header detection / positional mapping.
+type ImportField = Exclude<keyof VocabInput, "study_as_kanji">;
+
 // Map flexible header names (any language/casing) onto our canonical fields.
-const HEADER_SYNONYMS: Record<keyof VocabInput, string[]> = {
+const HEADER_SYNONYMS: Record<ImportField, string[]> = {
   kanji: ["kanji", "japanese", "word", "漢字", "kana", "hiragana"],
   romaji: ["romaji", "reading", "pronunciation", "roumaji", "romanji"],
   english: ["english", "meaning", "english meaning", "definition", "translation"],
@@ -12,7 +16,7 @@ const HEADER_SYNONYMS: Record<keyof VocabInput, string[]> = {
   category: ["category", "type", "pos", "part of speech", "class"],
 };
 
-const FIELD_ORDER: (keyof VocabInput)[] = [
+const FIELD_ORDER: ImportField[] = [
   "kanji",
   "romaji",
   "english",
@@ -24,7 +28,7 @@ const FIELD_ORDER: (keyof VocabInput)[] = [
 // like "Marathi meaning / my tips" claims the tips column via "marathi"/"tips"
 // instead of being grabbed by english's broad "meaning" synonym (which would
 // otherwise overwrite the real English column with the blank tips cell).
-const HEADER_MATCH_ORDER: (keyof VocabInput)[] = [
+const HEADER_MATCH_ORDER: ImportField[] = [
   "kanji",
   "romaji",
   "tips",
@@ -38,7 +42,7 @@ function normalize(s: string): string {
 
 // Given a list of header cells, produce an index→field mapping.
 // Returns null if no header cell matches any known synonym (positional fallback).
-function mapHeaders(headers: string[]): (keyof VocabInput | null)[] | null {
+function mapHeaders(headers: string[]): (ImportField | null)[] | null {
   let matched = false;
   const mapping = headers.map((h) => {
     const n = normalize(h);
@@ -57,7 +61,7 @@ function mapHeaders(headers: string[]): (keyof VocabInput | null)[] | null {
 // Build a VocabInput from a row of cells using a header mapping (or positional).
 function rowToVocab(
   cells: string[],
-  mapping: (keyof VocabInput | null)[] | null
+  mapping: (ImportField | null)[] | null
 ): VocabInput | null {
   const out: Record<string, string | null> = {};
   if (mapping) {

@@ -29,6 +29,7 @@ function sanitize(v: Partial<VocabInput>): VocabInput | null {
     english: v.english?.toString().trim() || null,
     tips: v.tips?.toString().trim() || null,
     category: v.category?.toString().trim() || null,
+    study_as_kanji: v.study_as_kanji === true, // also drill as a kanji-only card
   };
 }
 

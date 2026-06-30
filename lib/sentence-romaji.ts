@@ -8,14 +8,16 @@ import path from "node:path";
 
 const require = createRequire(import.meta.url);
 
-type Converter = {
+export type Converter = {
   convert: (text: string, opts: Record<string, unknown>) => Promise<string>;
 };
 
 let converter: Converter | null = null;
 let initPromise: Promise<Converter> | null = null;
 
-async function getConverter(): Promise<Converter> {
+// Exported so lib/furigana.ts shares this one heavy kuromoji init (it's the same
+// analyzer, just used in furigana mode rather than spaced-romaji mode).
+export async function getConverter(): Promise<Converter> {
   if (converter) return converter;
   if (!initPromise) {
     initPromise = (async () => {

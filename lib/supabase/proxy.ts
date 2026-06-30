@@ -6,8 +6,9 @@ const SUPABASE_KEY =
   process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
-// Paths reachable while signed out.
-const PUBLIC_PATHS = ["/login"];
+// Paths reachable while signed out. /auth/callback exchanges the recovery email
+// link for a session (the user has none yet); /reset-password is its landing page.
+const PUBLIC_PATHS = ["/login", "/auth/callback", "/reset-password"];
 
 function isPublic(path: string) {
   return PUBLIC_PATHS.some((p) => path === p || path.startsWith(p + "/"));

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -15,22 +15,51 @@ import {
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
+type Mode = "signin" | "signup" | "forgot";
+
 export default function LoginPage() {
-  const [mode, setMode] = useState<"signin" | "signup">("signin");
+  const [mode, setMode] = useState<Mode>("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
-  const [checkEmail, setCheckEmail] = useState(false);
+  const [checkEmail, setCheckEmail] = useState(false); // signup confirmation sent
+  const [resetSent, setResetSent] = useState(false); // password-reset email sent
 
   const isSignup = mode === "signup";
+  const isForgot = mode === "forgot";
+
+  // /auth/callback bounces a failed recovery link back here with ?error=auth_link.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("error") === "auth_link") {
+      toast.error("That reset link didn’t work", {
+        description: "It may have expired. Request a new one below.",
+      });
+      window.history.replaceState(null, "", window.location.pathname);
+    }
+  }, []);
+
+  function switchMode(next: Mode) {
+    setMode(next);
+    setCheckEmail(false);
+    setResetSent(false);
+    setPassword("");
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!email.trim() || !password) return;
+    if (!email.trim()) return;
+    if (!isForgot && !password) return;
     const supabase = createClient();
     setBusy(true);
     try {
-      if (isSignup) {
+      if (isForgot) {
+        const { error } = await supabase.auth.resetPasswordForEmail(email, {
+          redirectTo: `${window.location.origin}/auth/callback?next=/reset-password`,
+        });
+        if (error) throw error;
+        setResetSent(true);
+      } else if (isSignup) {
         const { data, error } = await supabase.auth.signUp({ email, password });
         if (error) throw error;
         if (data.session) {
@@ -47,13 +76,20 @@ export default function LoginPage() {
         window.location.assign("/"); // full reload so the proxy re-evaluates
       }
     } catch (err) {
-      toast.error(isSignup ? "Couldn’t create account" : "Couldn’t sign in", {
-        description: (err as Error).message,
-      });
+      toast.error(
+        isForgot
+          ? "Couldn’t send reset link"
+          : isSignup
+            ? "Couldn’t create account"
+            : "Couldn’t sign in",
+        { description: (err as Error).message }
+      );
     } finally {
       setBusy(false);
     }
   }
+
+  const notice = checkEmail || resetSent;
 
   return (
     <main className="flex min-h-full flex-1 items-center justify-center p-4">
@@ -63,11 +99,19 @@ export default function LoginPage() {
             <span className="jp">日本語</span>{" "}
             <span className="text-muted-foreground font-normal">Vocab</span>
           </div>
-          <CardTitle>{isSignup ? "Create your account" : "Welcome back"}</CardTitle>
+          <CardTitle>
+            {isForgot
+              ? "Reset your password"
+              : isSignup
+                ? "Create your account"
+                : "Welcome back"}
+          </CardTitle>
           <CardDescription>
-            {isSignup
-              ? "Sign up to start your own vocabulary list."
-              : "Sign in to your vocabulary list."}
+            {isForgot
+              ? "Enter your email and we’ll send you a reset link."
+              : isSignup
+                ? "Sign up to start your own vocabulary list."
+                : "Sign in to your vocabulary list."}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -77,6 +121,14 @@ export default function LoginPage() {
               <AlertDescription>
                 We sent a confirmation link to <strong>{email}</strong>. Click it
                 to finish creating your account, then sign in.
+              </AlertDescription>
+            </Alert>
+          ) : resetSent ? (
+            <Alert>
+              <AlertTitle>Check your email</AlertTitle>
+              <AlertDescription>
+                We sent a password reset link to <strong>{email}</strong>. Click
+                it to choose a new password.
               </AlertDescription>
             </Alert>
           ) : (
@@ -95,39 +147,85 @@ export default function LoginPage() {
                     autoFocus
                   />
                 </Field>
-                <Field>
-                  <FieldLabel htmlFor="password">Password</FieldLabel>
-                  <Input
-                    id="password"
-                    type="password"
-                    autoComplete={isSignup ? "new-password" : "current-password"}
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="••••••••"
-                    minLength={6}
-                    required
-                  />
-                </Field>
+                {!isForgot && (
+                  <Field>
+                    <FieldLabel htmlFor="password">Password</FieldLabel>
+                    <Input
+                      id="password"
+                      type="password"
+                      autoComplete={
+                        isSignup ? "new-password" : "current-password"
+                      }
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder="••••••••"
+                      minLength={6}
+                      required
+                    />
+                  </Field>
+                )}
                 <Button type="submit" size="lg" disabled={busy} className="w-full">
                   {busy
                     ? "Please wait…"
-                    : isSignup
-                      ? "Create account"
-                      : "Sign in"}
+                    : isForgot
+                      ? "Send reset link"
+                      : isSignup
+                        ? "Create account"
+                        : "Sign in"}
                 </Button>
               </FieldGroup>
             </form>
           )}
 
-          {!checkEmail && (
+          {!notice && (
+            <div className="mt-4 space-y-2 text-center text-sm text-muted-foreground">
+              {mode === "signin" && (
+                <p>
+                  <button
+                    type="button"
+                    className="font-medium text-primary hover:underline"
+                    onClick={() => switchMode("forgot")}
+                  >
+                    Forgot password?
+                  </button>
+                </p>
+              )}
+              <p>
+                {isForgot ? (
+                  <>
+                    Remembered it?{" "}
+                    <button
+                      type="button"
+                      className="font-medium text-primary hover:underline"
+                      onClick={() => switchMode("signin")}
+                    >
+                      Back to sign in
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    {isSignup ? "Already have an account?" : "New here?"}{" "}
+                    <button
+                      type="button"
+                      className="font-medium text-primary hover:underline"
+                      onClick={() => switchMode(isSignup ? "signin" : "signup")}
+                    >
+                      {isSignup ? "Sign in" : "Create one"}
+                    </button>
+                  </>
+                )}
+              </p>
+            </div>
+          )}
+
+          {resetSent && (
             <p className="mt-4 text-center text-sm text-muted-foreground">
-              {isSignup ? "Already have an account?" : "New here?"}{" "}
               <button
                 type="button"
                 className="font-medium text-primary hover:underline"
-                onClick={() => setMode(isSignup ? "signin" : "signup")}
+                onClick={() => switchMode("signin")}
               >
-                {isSignup ? "Sign in" : "Create one"}
+                Back to sign in
               </button>
             </p>
           )}

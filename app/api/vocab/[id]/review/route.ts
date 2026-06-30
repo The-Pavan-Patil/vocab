@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/supabase/require-user";
-import { newState, schedule, type Grade, type SrsState } from "@/lib/srs";
+import { isEarly, schedule, KANJI_TUNING, WORD_TUNING, type Grade } from "@/lib/srs";
+import { readSrs, writeSrs, type StudyMode } from "@/lib/decks";
 
 export const runtime = "nodejs";
 
@@ -9,17 +10,18 @@ type Params = { params: Promise<{ id: string }> };
 const GRADES: Grade[] = ["remember", "right", "wrong"];
 
 // POST /api/vocab/[id]/review — record a flashcard review.
-// Body: { grade: "remember" | "right" | "wrong" }
-// Loads the card's current SRS state, computes the next schedule (the server is
-// the single source of truth for intervals), persists it, and appends a row to
-// the reviews log. Returns the updated card.
+// Body: { grade: "remember" | "right" | "wrong", practice?: boolean, mode?: "word" | "kanji" }
+// Loads the card's current SRS state for the chosen deck (the server is the
+// single source of truth for intervals), computes + persists the next schedule
+// to that deck's columns, and appends a row to the reviews log. Returns the
+// updated card. `mode` selects the word track or the independent kanji track.
 export async function POST(request: Request, { params }: Params) {
   const auth = await requireUser();
   if ("response" in auth) return auth.response;
 
   const { id } = await params;
 
-  let body: { grade?: unknown };
+  let body: { grade?: unknown; practice?: unknown; mode?: unknown };
   try {
     body = await request.json();
   } catch {
@@ -33,11 +35,18 @@ export async function POST(request: Request, { params }: Params) {
       { status: 400 }
     );
   }
+  // A cram ("Study again") review of a not-yet-due card. We honor it only when
+  // the card really isn't due yet (checked below against the server clock).
+  const practice = body.practice === true;
+  // Which deck this review belongs to — picks the column set + tuning + log mode.
+  const mode: StudyMode = body.mode === "kanji" ? "kanji" : "word";
+  const tuning = mode === "kanji" ? KANJI_TUNING : WORD_TUNING;
 
-  // Fetch the card's current scheduling state (RLS scopes this to the owner).
+  // Fetch the full card row (RLS scopes this to the owner). We select * so the
+  // practice path can return the unchanged card with all its display fields.
   const { data: card, error: readErr } = await auth.supabase
     .from("vocab")
-    .select("ease, interval_days, reps, lapses, state, due_at, last_reviewed_at")
+    .select("*")
     .eq("id", id)
     .maybeSingle();
   if (readErr) {
@@ -47,22 +56,41 @@ export async function POST(request: Request, { params }: Params) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  // Overlay the row onto sane defaults so a pre-migration / partially-populated
-  // card is treated as new rather than crashing the scheduler.
-  const prev: SrsState = { ...newState(), ...card };
-  const { next, log } = schedule(prev, grade, Date.now());
+  const reviewedAt = Date.now();
 
+  // Read THIS deck's SRS state (kanji_* columns for the kanji deck), overlaying
+  // sane defaults so a pre-migration / partially-populated row is treated as new.
+  const prev = readSrs(card, mode);
+
+  // Practice (cram) review of an EARLY card: don't move the schedule — reviewing
+  // before a card is due must not inflate its interval. We still log the rep
+  // (interval/ease unchanged) for history, then return the card untouched.
+  if (practice && isEarly(prev, reviewedAt)) {
+    const elapsed_days = prev.last_reviewed_at
+      ? (reviewedAt - Date.parse(prev.last_reviewed_at)) / 86_400_000
+      : null;
+    const { error: logErr } = await auth.supabase.from("reviews").insert({
+      vocab_id: id,
+      user_id: auth.user.id,
+      grade,
+      mode,
+      interval_before: prev.interval_days,
+      interval_after: prev.interval_days, // unchanged — practice doesn't reschedule
+      ease_after: prev.ease,
+      elapsed_days,
+    });
+    if (logErr) {
+      console.error("reviews insert failed:", logErr.message);
+    }
+    return NextResponse.json({ data: card });
+  }
+
+  const { next, log } = schedule(prev, grade, reviewedAt, tuning);
+
+  // Persist the new schedule to the chosen deck's columns only.
   const { data: updated, error: updErr } = await auth.supabase
     .from("vocab")
-    .update({
-      ease: next.ease,
-      interval_days: next.interval_days,
-      reps: next.reps,
-      lapses: next.lapses,
-      state: next.state,
-      due_at: next.due_at,
-      last_reviewed_at: next.last_reviewed_at,
-    })
+    .update(writeSrs(next, mode))
     .eq("id", id)
     .select()
     .maybeSingle();
@@ -79,6 +107,7 @@ export async function POST(request: Request, { params }: Params) {
     vocab_id: id,
     user_id: auth.user.id,
     grade,
+    mode,
     interval_before: log.interval_before,
     interval_after: log.interval_after,
     ease_after: log.ease_after,

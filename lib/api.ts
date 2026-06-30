@@ -1,4 +1,13 @@
-import type { DictDetails, DictEntry, Grade, Vocab, VocabInput } from "./types";
+import type {
+  DictDetails,
+  DictEntry,
+  Grade,
+  KanjiCard,
+  KanjiInfo,
+  Vocab,
+  VocabInput,
+} from "./types";
+import type { StudyMode } from "./decks";
 
 // Thin client-side fetch helpers used by the UI components.
 
@@ -72,16 +81,69 @@ export async function deleteVocab(id: string): Promise<void> {
 }
 
 // Record a flashcard review. The server computes the next schedule and returns
-// the updated card (with its new due_at / interval).
-export async function reviewVocab(id: string, grade: Grade): Promise<Vocab> {
+// the updated card (with its new due_at / interval). Pass `practice: true` for a
+// cram review of a not-yet-due card — the server logs it but leaves the schedule
+// untouched (the card comes back unchanged), so cramming can't inflate intervals.
+export async function reviewVocab(
+  id: string,
+  grade: Grade,
+  opts: { practice?: boolean; mode?: StudyMode } = {}
+): Promise<Vocab> {
   const res = await fetch(`/api/vocab/${id}/review`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ grade }),
+    body: JSON.stringify({
+      grade,
+      practice: opts.practice ?? false,
+      mode: opts.mode ?? "word",
+    }),
   });
   const json = await parseJson(res);
   ensureOk(res, json, "Failed to save review");
   return json.data as Vocab;
+}
+
+// --- Smart Kanji deck ---
+
+// The user's kanji-in-word cards (auto-populated from study_as_kanji words).
+export async function fetchKanjiCards(): Promise<KanjiCard[]> {
+  const res = await fetch("/api/kanji-cards", { cache: "no-store" });
+  const json = await parseJson(res);
+  ensureOk(res, json, "Failed to load kanji cards");
+  return (json.data as KanjiCard[]) ?? [];
+}
+
+// Reconcile the smart deck from the user's toggled words. Returns new-card count.
+export async function syncKanjiCards(): Promise<{ created: number }> {
+  const res = await fetch("/api/kanji-cards/sync", { method: "POST" });
+  const json = await parseJson(res);
+  ensureOk(res, json, "Failed to sync kanji deck");
+  return { created: (json.created as number) ?? 0 };
+}
+
+export async function reviewKanjiCard(
+  id: string,
+  grade: Grade,
+  opts: { practice?: boolean } = {}
+): Promise<KanjiCard> {
+  const res = await fetch(`/api/kanji-cards/${id}/review`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ grade, practice: opts.practice ?? false }),
+  });
+  const json = await parseJson(res);
+  ensureOk(res, json, "Failed to save review");
+  return json.data as KanjiCard;
+}
+
+// Normalized kanjiapi.dev info for one character (readings, JLPT, example words).
+export async function fetchKanji(char: string): Promise<KanjiInfo> {
+  const res = await fetch(`/api/kanji/${encodeURIComponent(char)}`, {
+    cache: "no-store",
+  });
+  const json = await parseJson(res);
+  ensureOk(res, json, "Failed to load kanji");
+  return json.data as KanjiInfo;
 }
 
 export async function importFile(file: File): Promise<VocabInput[]> {

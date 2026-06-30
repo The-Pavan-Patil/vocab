@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "vocab",
+  "project_id": "c329895e-d04c-4b64-8d56-8d3edc59685f"
+}
