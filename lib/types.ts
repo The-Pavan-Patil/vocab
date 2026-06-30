@@ -16,6 +16,17 @@ export type Vocab = {
   state: "new" | "review" | "relearning";
   due_at: string | null;
   last_reviewed_at: string | null;
+  // Kanji study deck (migration 0004). `study_as_kanji` opts this word into the
+  // Kanji deck; the `kanji_*` columns mirror the base SRS state above but track
+  // an INDEPENDENT schedule for the kanji-only card. See lib/decks.ts.
+  study_as_kanji: boolean;
+  kanji_ease: number;
+  kanji_interval_days: number;
+  kanji_reps: number;
+  kanji_lapses: number;
+  kanji_state: "new" | "review" | "relearning";
+  kanji_due_at: string | null;
+  kanji_last_reviewed_at: string | null;
 };
 
 // Re-export the SRS grade so UI code can import it from one place.
@@ -28,6 +39,7 @@ export type VocabInput = {
   english?: string | null;
   tips?: string | null;
   category?: string | null;
+  study_as_kanji?: boolean; // also drill this word as a kanji-only card
 };
 
 export const CATEGORIES = [
@@ -85,6 +97,51 @@ export type DictKanji = {
   onyomi: string[];
   strokeCount: string;
   jlpt: string;
+};
+
+// ---------------------------------------------------------------------------
+// Smart Kanji deck (kanjiapi.dev + kanji_cards). See docs/spaced-repetition.md.
+// ---------------------------------------------------------------------------
+
+// One example word for a kanji (from kanjiapi.dev /v1/words/{char}).
+export type KanjiWord = {
+  written: string; // e.g. 朝食
+  pronounced: string; // e.g. ちょうしょく
+  glosses: string[]; // English meanings
+};
+
+// Normalized kanjiapi.dev data for a single kanji character.
+export type KanjiInfo = {
+  character: string;
+  meanings: string[];
+  on: string[]; // on'yomi (音読み)
+  kun: string[]; // kun'yomi (訓読み)
+  jlpt: number | null; // 5=N5 … 1=N1, null = not in JLPT
+  grade: number | null;
+  strokeCount: number | null;
+  heisig: string | null;
+  words: KanjiWord[]; // example words that use this kanji
+};
+
+// A smart-deck study item: one kanji as it appears in one of the user's words.
+export type KanjiCard = {
+  id: string;
+  character: string;
+  jlpt: number | null;
+  word: string; // source word, e.g. 食べる
+  reading: string | null; // the kanji's reading in this word, e.g. た
+  word_reading: string | null; // full word reading, e.g. たべる
+  word_meaning: string | null;
+  vocab_id: string | null;
+  created_at: string;
+  // SRS state (base-named columns; scheduled by lib/srs.ts directly).
+  ease: number;
+  interval_days: number;
+  reps: number;
+  lapses: number;
+  state: "new" | "review" | "relearning";
+  due_at: string | null;
+  last_reviewed_at: string | null;
 };
 
 export type DictDetails = {

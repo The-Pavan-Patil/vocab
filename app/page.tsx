@@ -1,17 +1,19 @@
 "use client";
 
-import { Activity, useCallback, useEffect, useState } from "react";
-import { PencilLine, Layers, List, Upload, BookOpen } from "lucide-react";
+import { Activity, useCallback, useEffect, useMemo, useState } from "react";
+import { PencilLine, Layers, Languages, List, Sparkles, Upload, BookOpen } from "lucide-react";
 import { Tabs as TabsPrimitive } from "radix-ui";
 import { TabsContent } from "@/components/ui/tabs";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import AddVocabForm from "@/components/AddVocabForm";
 import Flashcards from "@/components/Flashcards";
+import SmartKanjiDeck from "@/components/SmartKanjiDeck";
 import VocabTable from "@/components/VocabTable";
 import ImportPanel from "@/components/ImportPanel";
 import DictionarySearch from "@/components/DictionarySearch";
 import AccountMenu from "@/components/AccountMenu";
 import { fetchVocab } from "@/lib/api";
+import { deckCard } from "@/lib/decks";
 import type { Vocab } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -19,6 +21,8 @@ const TABS = [
   { value: "add", label: "Add", short: "Add", icon: PencilLine },
   { value: "dictionary", label: "Dictionary", short: "Dict", icon: BookOpen },
   { value: "flashcards", label: "Flashcards", short: "Cards", icon: Layers },
+  { value: "kanji", label: "Kanji", short: "Kanji", icon: Languages },
+  { value: "smart-kanji", label: "Smart Kanji", short: "Smart", icon: Sparkles },
   { value: "list", label: "List", short: "List", icon: List },
   { value: "import", label: "Import", short: "Import", icon: Upload },
 ];
@@ -52,6 +56,13 @@ export default function Home() {
       active = false;
     };
   }, []);
+
+  // The Kanji deck: words opted in via `study_as_kanji`, projected so Flashcards
+  // reads each card's independent kanji_* schedule.
+  const kanjiVocab = useMemo(
+    () => vocab.filter((v) => v.study_as_kanji).map((v) => deckCard(v, "kanji")),
+    [vocab]
+  );
 
   return (
     <TabsPrimitive.Root
@@ -120,6 +131,16 @@ export default function Home() {
             <Flashcards vocab={vocab} />
           </Activity>
         </TabsContent>
+        <TabsContent value="kanji" forceMount>
+          <Activity mode={tab === "kanji" ? "visible" : "hidden"}>
+            <Flashcards vocab={kanjiVocab} mode="kanji" />
+          </Activity>
+        </TabsContent>
+        <TabsContent value="smart-kanji" forceMount>
+          <Activity mode={tab === "smart-kanji" ? "visible" : "hidden"}>
+            <SmartKanjiDeck active={tab === "smart-kanji"} />
+          </Activity>
+        </TabsContent>
         <TabsContent value="list" forceMount>
           <Activity mode={tab === "list" ? "visible" : "hidden"}>
             <VocabTable vocab={vocab} onChanged={reload} />
@@ -138,7 +159,7 @@ export default function Home() {
         aria-label="Sections"
         className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-background/95 pb-[env(safe-area-inset-bottom)] backdrop-blur sm:hidden"
       >
-        <ul className="grid grid-cols-5">
+        <ul className="grid grid-cols-7">
           {TABS.map((t) => {
             const active = tab === t.value;
             return (

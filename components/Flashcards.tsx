@@ -14,10 +14,13 @@ import { CATEGORIES, type Grade, type Vocab } from "@/lib/types";
 import {
   NEW_CARDS_PER_SESSION,
   RELEARN_GAP,
+  SESSION_SIZE_OPTIONS,
   buildSession,
+  isEarly,
   isNew,
   nextDueAt,
 } from "@/lib/srs";
+import { deckCard, type StudyMode } from "@/lib/decks";
 import { reviewVocab } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -51,7 +54,18 @@ function humanizeUntil(ms: number): string {
   return `${days} day${days === 1 ? "" : "s"}`;
 }
 
-export default function Flashcards({ vocab }: { vocab: Vocab[] }) {
+// `vocab` arrives already projected for `mode` (the page maps kanji rows through
+// deckCard), so all the session logic below reads the right deck's schedule. The
+// only mode-specific behavior here is the card faces, the localStorage key, the
+// review `mode`, and re-projecting the server's response after a grade.
+export default function Flashcards({
+  vocab,
+  mode = "word",
+}: {
+  vocab: Vocab[];
+  mode?: StudyMode;
+}) {
+  const isKanji = mode === "kanji";
   const [category, setCategory] = useState<string>("all");
   const [sessionId, setSessionId] = useState(0); // bump to (re)start a session
   // "Study again" / restart re-studies cards we just pushed into the future — a
@@ -62,6 +76,10 @@ export default function Flashcards({ vocab }: { vocab: Vocab[] }) {
   // Session "clock": React purity forbids Date.now() during render, so we read
   // the current time once when a session starts and keep it in state.
   const [now, setNow] = useState(() => Date.now());
+  // How many never-seen cards to introduce per session (20 / 50 / 100 / All).
+  // User-configurable, persisted per browser; loaded from localStorage on mount
+  // (effect below, not a lazy initializer, to avoid an SSR/hydration mismatch).
+  const [newLimit, setNewLimit] = useState<number>(NEW_CARDS_PER_SESSION);
 
   // Local working copy of the vocab. Reviews update due dates here so a *new*
   // session (Study again) correctly excludes cards we just pushed into the
@@ -72,18 +90,37 @@ export default function Flashcards({ vocab }: { vocab: Vocab[] }) {
   const [remaining, setRemaining] = useState<Vocab[]>(() =>
     buildSession(byCategory(vocab, "all"), Date.now())
   );
-  const [stats, setStats] = useState({ remember: 0, right: 0, wrong: 0 });
+  // Distinct-card session accounting: a stable progress denominator and an
+  // honest recap that doesn't double-count a card you forgot then recalled.
+  const [sessionTotal, setSessionTotal] = useState(() => remaining.length);
+  const [reviewedIds, setReviewedIds] = useState<Set<string>>(() => new Set());
+  const [lapsedIds, setLapsedIds] = useState<Set<string>>(() => new Set());
   const [flipped, setFlipped] = useState(false);
   const [showHint, setShowHint] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // (Re)build the session whenever the source list, category, or session id
-  // changes. New identity on any dep change → triggers the render-time reset
-  // below (the repo's "you might not need an effect" pattern).
+  // Load the saved session size once on mount. The first render already used the
+  // server default (100), so applying the stored value here is a safe
+  // post-hydration update (no SSR mismatch), not derived render state.
+  useEffect(() => {
+    const raw =
+      typeof window !== "undefined"
+        ? window.localStorage.getItem(`vocab:sessionSize:${mode}`)
+        : null;
+    if (raw == null) return;
+    const parsed = raw === "all" ? Infinity : Number(raw);
+    if (parsed !== Infinity && !Number.isFinite(parsed)) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setNewLimit(parsed);
+  }, [mode]);
+
+  // (Re)build the session whenever the source list, category, session id, or
+  // chosen size changes. New identity on any dep change → triggers the
+  // render-time reset below (the repo's "you might not need an effect" pattern).
   const sessionToken = useMemo(
     () => ({}),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [vocab, category, sessionId]
+    [vocab, category, sessionId, newLimit]
   );
   const [prevToken, setPrevToken] = useState(sessionToken);
   if (prevToken !== sessionToken) {
@@ -98,20 +135,23 @@ export default function Flashcards({ vocab }: { vocab: Vocab[] }) {
     }
     // A parent reload always restudies the fresh due data (never a cram);
     // restart() sets `cram` to re-include cards we just scheduled ahead.
-    setRemaining(
-      buildSession(byCategory(source, category), now, {
-        cram: cram && !vocabChanged,
-      })
-    );
+    const nextQueue = buildSession(byCategory(source, category), now, {
+      newLimit,
+      cram: cram && !vocabChanged,
+    });
+    setRemaining(nextQueue);
+    setSessionTotal(nextQueue.length);
     setCram(false);
-    setStats({ remember: 0, right: 0, wrong: 0 });
+    setReviewedIds(new Set());
+    setLapsedIds(new Set());
     setFlipped(false);
     setShowHint(false);
     setError(null);
   }
 
   const card = remaining[0];
-  const reviewedCount = stats.remember + stats.right + stats.wrong;
+  const reviewedCount = reviewedIds.size; // distinct cards graded this session
+  const done = sessionTotal - remaining.length; // cards cleared from the queue
 
   // (Re)start a session against the latest schedules / a fresh clock. Runs in an
   // event handler, so reading Date.now() here is allowed.
@@ -124,6 +164,18 @@ export default function Flashcards({ vocab }: { vocab: Vocab[] }) {
     setNow(Date.now());
     setCategory(next);
   }
+  // Change the per-session new-card cap and remember it for next time. The
+  // sessionToken dep on `newLimit` rebuilds the queue.
+  function changeSessionSize(next: number) {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(
+        `vocab:sessionSize:${mode}`,
+        Number.isFinite(next) ? String(next) : "all"
+      );
+    }
+    setNow(Date.now());
+    setNewLimit(next);
+  }
 
   // New cards in this category that aren't already in the queue — the pool we
   // can pull from to grow the session past the initial new-card cap.
@@ -131,15 +183,22 @@ export default function Flashcards({ vocab }: { vocab: Vocab[] }) {
   const availableNew = byCategory(cards, category).filter(
     (c) => isNew(c) && !queuedIds.has(c.id)
   ).length;
+  // Size of the next "Add more" batch — `availableNew` when the size is "All".
+  const moreBatch = Number.isFinite(newLimit)
+    ? Math.min(newLimit, availableNew)
+    : availableNew;
 
   // Pull the next batch of new cards into the live queue — grows the current
   // run ("increase the session"), or resumes after finishing ("keep going").
+  // Oldest-added first, matching buildSession, so old words aren't starved.
   function addMore() {
     const more = byCategory(cards, category)
       .filter((c) => isNew(c) && !queuedIds.has(c.id))
-      .slice(0, NEW_CARDS_PER_SESSION);
+      .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at))
+      .slice(0, newLimit);
     if (more.length === 0) return;
     setRemaining((r) => [...r, ...more]);
+    setSessionTotal((t) => t + more.length);
   }
 
   // Grade the current card. Advances optimistically (snappy), then persists in
@@ -147,7 +206,14 @@ export default function Flashcards({ vocab }: { vocab: Vocab[] }) {
   async function grade(g: Grade) {
     const cur = remaining[0];
     if (!cur) return;
-    setStats((s) => ({ ...s, [g]: s[g] + 1 }));
+    // Reviewing a card before it's due (only reachable while cramming) is a
+    // practice rep: the server logs it but leaves the schedule untouched, so
+    // cramming can't inflate intervals.
+    const practice = isEarly(cur, now);
+    setReviewedIds((s) => (s.has(cur.id) ? s : new Set(s).add(cur.id)));
+    if (g === "wrong") {
+      setLapsedIds((s) => (s.has(cur.id) ? s : new Set(s).add(cur.id)));
+    }
     setFlipped(false);
     setShowHint(false);
     setError(null);
@@ -163,8 +229,11 @@ export default function Flashcards({ vocab }: { vocab: Vocab[] }) {
       return rest;
     });
     try {
-      const updated = await reviewVocab(cur.id, g);
-      setCards((cs) => cs.map((c) => (c.id === updated.id ? updated : c)));
+      const updated = await reviewVocab(cur.id, g, { practice, mode });
+      // Re-project the raw server row for this deck so our working copy keeps
+      // reading the right schedule (no-op for the word deck).
+      const projected = deckCard(updated, mode);
+      setCards((cs) => cs.map((c) => (c.id === projected.id ? projected : c)));
     } catch (e) {
       setError((e as Error).message);
     }
@@ -223,9 +292,11 @@ export default function Flashcards({ vocab }: { vocab: Vocab[] }) {
           <EmptyMedia variant="icon">
             <Layers />
           </EmptyMedia>
-          <EmptyTitle>No flashcards yet</EmptyTitle>
+          <EmptyTitle>{isKanji ? "No kanji yet" : "No flashcards yet"}</EmptyTitle>
           <EmptyDescription>
-            Add a few words first, then come back here to revise them.
+            {isKanji
+              ? "Turn on “Also study as Kanji” on a word (Add, Dictionary, or the List tab) to drill it here as a kanji-only card."
+              : "Add a few words first, then come back here to revise them."}
           </EmptyDescription>
         </EmptyHeader>
       </Empty>
@@ -237,21 +308,45 @@ export default function Flashcards({ vocab }: { vocab: Vocab[] }) {
   return (
     <div className="mx-auto flex max-w-xl flex-col gap-5">
       <div className="flex items-center justify-between gap-3">
-        <Select value={category} onValueChange={changeCategory}>
-          <SelectTrigger className="w-48">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectGroup>
-              <SelectItem value="all">All categories</SelectItem>
-              {CATEGORIES.map((c) => (
-                <SelectItem key={c} value={c}>
-                  {c}
-                </SelectItem>
-              ))}
-            </SelectGroup>
-          </SelectContent>
-        </Select>
+        <div className="flex items-center gap-2">
+          <Select value={category} onValueChange={changeCategory}>
+            <SelectTrigger className="w-40">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectItem value="all">All categories</SelectItem>
+                {CATEGORIES.map((c) => (
+                  <SelectItem key={c} value={c}>
+                    {c}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+          <Select
+            value={Number.isFinite(newLimit) ? String(newLimit) : "all"}
+            onValueChange={(v) =>
+              changeSessionSize(v === "all" ? Infinity : Number(v))
+            }
+          >
+            <SelectTrigger className="w-36" aria-label="New cards per session">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                {SESSION_SIZE_OPTIONS.map((n) => (
+                  <SelectItem
+                    key={String(n)}
+                    value={Number.isFinite(n) ? String(n) : "all"}
+                  >
+                    {Number.isFinite(n) ? `${n} / session` : "All new cards"}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+        </div>
         {reviewedCount > 0 && (
           <span className="text-sm text-muted-foreground">
             {reviewedCount} reviewed
@@ -278,12 +373,13 @@ export default function Flashcards({ vocab }: { vocab: Vocab[] }) {
         // Queue is empty: either we just finished a run, or nothing is due yet.
         <CaughtUp
           reviewed={reviewedCount}
-          stats={stats}
+          revisited={lapsedIds.size}
           nextInMs={(() => {
             const next = nextDueAt(byCategory(cards, category), now);
             return next == null ? null : next - now;
           })()}
           availableNew={availableNew}
+          moreBatch={moreBatch}
           onRestart={restart}
           onStudyMore={addMore}
         />
@@ -302,7 +398,9 @@ export default function Flashcards({ vocab }: { vocab: Vocab[] }) {
                   <div className="jp text-6xl leading-tight font-medium break-words sm:text-7xl lg:text-8xl">
                     {card.kanji}
                   </div>
-                  {card.romaji && (
+                  {/* Word deck shows the reading up front; the Kanji deck hides
+                      it — recalling the reading from the glyph is the whole task. */}
+                  {!isKanji && card.romaji && (
                     <div className="text-xl text-muted-foreground sm:text-2xl">
                       {card.romaji}
                     </div>
@@ -313,6 +411,12 @@ export default function Flashcards({ vocab }: { vocab: Vocab[] }) {
                 </>
               ) : (
                 <>
+                  {/* Kanji deck reveals the reading too (recall reading + meaning). */}
+                  {isKanji && card.romaji && (
+                    <div className="jp text-2xl font-medium text-muted-foreground sm:text-3xl">
+                      {card.romaji}
+                    </div>
+                  )}
                   <div className="text-4xl font-medium break-words sm:text-5xl">
                     {card.english || "—"}
                   </div>
@@ -376,16 +480,14 @@ export default function Flashcards({ vocab }: { vocab: Vocab[] }) {
               className="h-1 w-full overflow-hidden rounded-full bg-muted"
               role="progressbar"
               aria-valuemin={0}
-              aria-valuemax={reviewedCount + remaining.length}
-              aria-valuenow={reviewedCount}
+              aria-valuemax={sessionTotal}
+              aria-valuenow={done}
               aria-label="Session progress"
             >
               <div
                 className="h-full rounded-full bg-primary transition-[width] duration-300 motion-reduce:transition-none"
                 style={{
-                  width: `${
-                    (reviewedCount / (reviewedCount + remaining.length)) * 100
-                  }%`,
+                  width: `${sessionTotal > 0 ? (done / sessionTotal) * 100 : 0}%`,
                 }}
               />
             </div>
@@ -399,8 +501,7 @@ export default function Flashcards({ vocab }: { vocab: Vocab[] }) {
                 className="h-auto p-0 text-xs"
                 onClick={addMore}
               >
-                Add {Math.min(NEW_CARDS_PER_SESSION, availableNew)} more ·{" "}
-                {availableNew} new waiting
+                Add {moreBatch} more · {availableNew} new waiting
               </Button>
             )}
           </div>
@@ -445,21 +546,23 @@ export default function Flashcards({ vocab }: { vocab: Vocab[] }) {
 // or "nothing due yet" with the time until the next review.
 function CaughtUp({
   reviewed,
-  stats,
+  revisited,
   nextInMs,
   availableNew,
+  moreBatch,
   onRestart,
   onStudyMore,
 }: {
   reviewed: number;
-  stats: { remember: number; right: number; wrong: number };
+  revisited: number;
   nextInMs: number | null;
   availableNew: number;
+  moreBatch: number;
   onRestart: () => void;
   onStudyMore: () => void;
 }) {
   const finished = reviewed > 0;
-  const moreBatch = Math.min(NEW_CARDS_PER_SESSION, availableNew);
+  const recalled = reviewed - revisited; // cards cleared without a lapse
   return (
     <Empty className="mx-auto max-w-xl">
       <EmptyHeader>
@@ -472,8 +575,8 @@ function CaughtUp({
         <EmptyDescription>
           {finished && (
             <>
-              {stats.remember + stats.right} recalled
-              {stats.wrong > 0 ? ` · ${stats.wrong} revisited` : ""}.{" "}
+              {recalled} recalled
+              {revisited > 0 ? ` · ${revisited} revisited` : ""}.{" "}
             </>
           )}
           {availableNew > 0 ? (

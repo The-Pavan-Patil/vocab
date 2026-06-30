@@ -36,6 +36,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Switch } from "@/components/ui/switch";
 
 // Build a PATCH that only carries non-empty cells, so updating a word already
 // in the list never wipes fields the user filled in (e.g. their Marathi tips).
@@ -59,6 +60,7 @@ export default function ImportPanel({
   const [filename, setFilename] = useState("");
   const [parsing, setParsing] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [studyAllAsKanji, setStudyAllAsKanji] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   // Words already saved, keyed by trimmed kanji — the duplicate lookup.
@@ -120,7 +122,9 @@ export default function ImportPanel({
     if (newCount === 0) return;
     setBusy(true);
     try {
-      const { inserted: n } = await createVocab(newRows);
+      const { inserted: n } = await createVocab(
+        newRows.map((r) => ({ ...r, study_as_kanji: studyAllAsKanji }))
+      );
       toast.success(`Imported ${n} new word${n === 1 ? "" : "s"}`);
       setRows((rs) => {
         const remaining = (rs ?? []).filter((r) => dupFor(r));
@@ -226,7 +230,20 @@ export default function ImportPanel({
                 first.
               </p>
             </div>
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              {newCount > 0 && (
+                <label
+                  htmlFor="import-study-kanji"
+                  className="flex items-center gap-2 text-sm text-muted-foreground"
+                >
+                  <Switch
+                    id="import-study-kanji"
+                    checked={studyAllAsKanji}
+                    onCheckedChange={setStudyAllAsKanji}
+                  />
+                  Study all as Kanji
+                </label>
+              )}
               {dupCount > 0 && (
                 <Button
                   variant="outline"

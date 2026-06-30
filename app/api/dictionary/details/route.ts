@@ -2,7 +2,9 @@ import { createRequire } from "node:module";
 import { NextResponse } from "next/server";
 import type JishoApi from "unofficial-jisho-api";
 import { toSentenceRomaji } from "@/lib/sentence-romaji";
-import type { DictExample, DictKanji } from "@/lib/types";
+import { fetchKanjiInfo } from "@/lib/kanjiapi";
+import { kanjiChars } from "@/lib/kanji-deck";
+import type { DictExample, DictKanji, KanjiInfo } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -12,10 +14,16 @@ const require = createRequire(import.meta.url);
 const JishoAPI = require("unofficial-jisho-api") as { new (): JishoApi };
 const jisho = new JishoAPI();
 
-// Unique CJK ideographs (kanji) within a word.
-function kanjiChars(word: string): string[] {
-  const matches = word.match(/[一-龯㐀-䶿]/g) ?? [];
-  return [...new Set(matches)];
+// kanjiapi.dev info → the DictKanji shape the details UI already renders.
+function infoToDictKanji(info: KanjiInfo): DictKanji {
+  return {
+    char: info.character,
+    meaning: info.meanings.join(", "),
+    kunyomi: info.kun,
+    onyomi: info.on,
+    strokeCount: info.strokeCount != null ? String(info.strokeCount) : "",
+    jlpt: info.jlpt != null ? `jlpt-n${info.jlpt}` : "",
+  };
 }
 
 // GET /api/dictionary/details?word= — example sentences (Tatoeba) + per-kanji
@@ -43,22 +51,12 @@ export async function GET(request: Request) {
     )
     .catch(() => [] as DictExample[]);
 
+  // Per-kanji breakdown now comes from kanjiapi.dev (richer + faster than the
+  // Jisho kanji scrape): readings, meanings, JLPT, stroke count.
   const kanjiP = Promise.all(
     kanjiChars(word).map((c) =>
-      jisho
-        .searchForKanji(c)
-        .then((k): DictKanji | null =>
-          k.found
-            ? {
-                char: c,
-                meaning: k.meaning ?? "",
-                kunyomi: k.kunyomi ?? [],
-                onyomi: k.onyomi ?? [],
-                strokeCount: k.strokeCount ?? "",
-                jlpt: k.jlptLevel ?? "",
-              }
-            : null
-        )
+      fetchKanjiInfo(c)
+        .then((info) => (info ? infoToDictKanji(info) : null))
         .catch(() => null)
     )
   ).then((arr) => arr.filter((k): k is DictKanji => k !== null));
