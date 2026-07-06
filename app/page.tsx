@@ -7,6 +7,7 @@ import { TabsContent } from "@/components/ui/tabs";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import AddVocabForm from "@/components/AddVocabForm";
 import Flashcards from "@/components/Flashcards";
+import KanjiTab from "@/components/KanjiTab";
 import SmartKanjiDeck from "@/components/SmartKanjiDeck";
 import VocabTable from "@/components/VocabTable";
 import ImportPanel from "@/components/ImportPanel";
@@ -133,7 +134,7 @@ export default function Home() {
         </TabsContent>
         <TabsContent value="kanji" forceMount>
           <Activity mode={tab === "kanji" ? "visible" : "hidden"}>
-            <Flashcards vocab={kanjiVocab} mode="kanji" />
+            <KanjiTab kanjiVocab={kanjiVocab} active={tab === "kanji"} />
           </Activity>
         </TabsContent>
         <TabsContent value="smart-kanji" forceMount>

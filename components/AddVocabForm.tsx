@@ -4,6 +4,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { createVocab } from "@/lib/api";
 import { CATEGORIES, type VocabInput } from "@/lib/types";
+import KanjiBreakdown from "@/components/KanjiBreakdown";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -44,6 +45,9 @@ export default function AddVocabForm({ onAdded }: { onAdded: () => void }) {
   const [form, setForm] = useState<VocabInput>(EMPTY);
   const [saving, setSaving] = useState(false);
   const [invalid, setInvalid] = useState(false);
+  // The kanji the user chose to study, reported by <KanjiBreakdown> (only
+  // meaningful while "study as kanji" is on).
+  const [kanjiSelection, setKanjiSelection] = useState<string[]>([]);
 
   const set = (k: keyof VocabInput, v: string) =>
     setForm((f) => ({ ...f, [k]: v }));
@@ -57,9 +61,12 @@ export default function AddVocabForm({ onAdded }: { onAdded: () => void }) {
     setInvalid(false);
     setSaving(true);
     try {
-      const { inserted } = await createVocab(form);
+      // When studying as kanji, persist exactly the kanji the user left on.
+      const kanji_selection = form.study_as_kanji ? kanjiSelection : null;
+      const { inserted } = await createVocab({ ...form, kanji_selection });
       if (inserted) {
         setForm({ ...EMPTY, category: form.category });
+        setKanjiSelection([]);
         toast.success("Saved", { description: "Added to your vocab list." });
         onAdded();
       } else {
@@ -175,6 +182,13 @@ export default function AddVocabForm({ onAdded }: { onAdded: () => void }) {
                 }
               />
             </Field>
+
+            {form.study_as_kanji && (
+              <KanjiBreakdown
+                word={form.kanji ?? ""}
+                onChange={setKanjiSelection}
+              />
+            )}
 
             <Button
               type="submit"

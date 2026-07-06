@@ -22,11 +22,15 @@ export async function syncKanjiCards(
   userId: string,
   words: Vocab[]
 ): Promise<number> {
-  const toggled = words.filter((w) => w.study_as_kanji && kanjiChars(w.kanji).length > 0);
+  const toggled = words.filter((w) => w.study_as_kanji);
   const rows: Record<string, unknown>[] = [];
 
   for (const w of toggled) {
-    const chars = kanjiChars(w.kanji);
+    // The user's curated set when present (migration 0006), else every kanji in
+    // the word. An explicit selection is honored verbatim — including a kanji the
+    // user turned on that has no JLPT level (it just won't show in leveled buckets).
+    const explicit = w.kanji_selection != null;
+    const chars = explicit ? (w.kanji_selection as string[]) : kanjiChars(w.kanji);
     if (chars.length === 0) continue;
 
     const segs = await segment(w.kanji).catch(() => []);
@@ -37,8 +41,10 @@ export async function syncKanjiCards(
 
     for (const ch of chars) {
       const info = await getKanji(supabase, ch);
-      // Only JLPT-graded kanji become smart cards (the deck is filtered by level).
-      if (!info || info.jlpt == null) continue;
+      if (!info) continue; // not a real kanji
+      // Default (uncurated) path keeps the old rule: only JLPT-graded kanji, so
+      // the leveled deck stays clean. An explicit selection overrides that.
+      if (!explicit && info.jlpt == null) continue;
       rows.push({
         user_id: userId,
         character: ch,

@@ -31,3 +31,19 @@ const KANJI_RE = /[一-龯㐀-䶿]/g;
 export function kanjiChars(text: string): string[] {
   return [...new Set(text.match(KANJI_RE) ?? [])];
 }
+
+/**
+ * Cluster cards so every card sharing a `character` is consecutive, preserving
+ * each character's first-appearance order in the input (stable within a group
+ * too). Feeding a newest-first list therefore yields groups ordered by their
+ * newest member, newest-first inside each group — the "All Kanjis" order.
+ */
+export function groupByKanji<T extends { character: string }>(cards: T[]): T[] {
+  const groups = new Map<string, T[]>();
+  for (const c of cards) {
+    const g = groups.get(c.character);
+    if (g) g.push(c);
+    else groups.set(c.character, [c]);
+  }
+  return [...groups.values()].flat();
+}

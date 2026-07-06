@@ -27,6 +27,9 @@ export type Vocab = {
   kanji_state: "new" | "review" | "relearning";
   kanji_due_at: string | null;
   kanji_last_reviewed_at: string | null;
+  // Which of this word's kanji the user opted to study as smart cards (migration
+  // 0006). NULL = not curated → syncKanjiCards falls back to all JLPT-graded kanji.
+  kanji_selection: string[] | null;
 };
 
 // Re-export the SRS grade so UI code can import it from one place.
@@ -40,6 +43,8 @@ export type VocabInput = {
   tips?: string | null;
   category?: string | null;
   study_as_kanji?: boolean; // also drill this word as a kanji-only card
+  // Chosen kanji to study as smart cards; omitted/null = all JLPT-graded kanji.
+  kanji_selection?: string[] | null;
 };
 
 export const CATEGORIES = [

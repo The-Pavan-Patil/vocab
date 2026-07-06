@@ -23,14 +23,26 @@ export async function GET() {
 function sanitize(v: Partial<VocabInput>): VocabInput | null {
   const kanji = (v.kanji ?? "").toString().trim();
   if (!kanji) return null;
-  return {
+  const studyAsKanji = v.study_as_kanji === true;
+  // The curated kanji set only means something when the word is studied as kanji;
+  // keep just the string entries, else null (= sync's all-graded default).
+  const selection =
+    studyAsKanji && Array.isArray(v.kanji_selection)
+      ? v.kanji_selection.filter((c): c is string => typeof c === "string")
+      : null;
+  const row: VocabInput = {
     kanji,
     romaji: v.romaji?.toString().trim() || null,
     english: v.english?.toString().trim() || null,
     tips: v.tips?.toString().trim() || null,
     category: v.category?.toString().trim() || null,
-    study_as_kanji: v.study_as_kanji === true, // also drill as a kanji-only card
+    study_as_kanji: studyAsKanji, // also drill as a kanji-only card
   };
+  // Only attach the curated set when the user actually chose one, so uncurated
+  // adds never reference the kanji_selection column — they keep working even
+  // before migration 0006 has been applied.
+  if (selection) row.kanji_selection = selection;
+  return row;
 }
 
 // POST /api/vocab — create one ({...}) or many ({ rows: [...] }) records for the

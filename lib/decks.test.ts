@@ -43,6 +43,7 @@ function vocab(over: Partial<Vocab> = {}): Vocab {
     kanji_state: "new",
     kanji_due_at: null,
     kanji_last_reviewed_at: null,
+    kanji_selection: null,
     ...over,
   };
 }

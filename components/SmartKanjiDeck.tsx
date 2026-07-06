@@ -11,7 +11,13 @@ import {
   isEarly,
   nextDueAt,
 } from "@/lib/srs";
-import { ALL_LEVELS, JLPT_LEVELS, levelLabel, matchesLevel } from "@/lib/kanji-deck";
+import {
+  ALL_LEVELS,
+  JLPT_LEVELS,
+  groupByKanji,
+  levelLabel,
+  matchesLevel,
+} from "@/lib/kanji-deck";
 import { fetchKanji, fetchKanjiCards, reviewKanjiCard, syncKanjiCards } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -53,7 +59,16 @@ function WordWithFocus({ word, char }: { word: string; char: string }) {
   );
 }
 
-export default function SmartKanjiDeck({ active = true }: { active?: boolean }) {
+export default function SmartKanjiDeck({
+  active = true,
+  variant = "smart",
+}: {
+  active?: boolean;
+  variant?: "smart" | "all";
+}) {
+  // "all" = the ungated "All Kanjis" review: every card, no JLPT/due filter,
+  // newest word first, grouped so the same kanji's words run consecutively.
+  const isAll = variant === "all";
   const [loading, setLoading] = useState(true);
   const [allCards, setAllCards] = useState<KanjiCard[]>([]);
   const [level, setLevel] = useState(5);
@@ -120,8 +135,18 @@ export default function SmartKanjiDeck({ active = true }: { active?: boolean }) 
   const [prevToken, setPrevToken] = useState(token);
   if (prevToken !== token) {
     setPrevToken(token);
-    const pool = allCards.filter((c) => matchesLevel(c, level));
-    const next = buildSession(pool, now, { newLimit, cram });
+    // "all": no algorithm — every card, newest word first, grouped by kanji.
+    // "smart": the leveled SRS queue (due-first, then new), unchanged.
+    const next = isAll
+      ? groupByKanji(
+          [...allCards].sort(
+            (a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)
+          )
+        )
+      : buildSession(allCards.filter((c) => matchesLevel(c, level)), now, {
+          newLimit,
+          cram,
+        });
     setRemaining(next);
     setSessionTotal(next.length);
     setCram(false);
@@ -181,7 +206,11 @@ export default function SmartKanjiDeck({ active = true }: { active?: boolean }) 
     });
     try {
       const updated = await reviewKanjiCard(cur.id, g, { practice });
-      setAllCards((cs) => cs.map((c) => (c.id === updated.id ? updated : c)));
+      // "all" is a fixed grouped pass over every card; folding the updated
+      // schedule back into allCards would retrigger the render-time rebuild and
+      // re-add the card we just cleared (it has no due-date filter to drop it).
+      // The review is still persisted server-side either way.
+      if (!isAll) setAllCards((cs) => cs.map((c) => (c.id === updated.id ? updated : c)));
     } catch (e) {
       setError((e as Error).message);
     }
@@ -255,40 +284,46 @@ export default function SmartKanjiDeck({ active = true }: { active?: boolean }) 
   return (
     <div className="mx-auto flex max-w-xl flex-col gap-5">
       <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <Select value={String(level)} onValueChange={(v) => changeLevel(Number(v))}>
-            <SelectTrigger className="w-32" aria-label="JLPT level">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                {JLPT_LEVELS.map((l) => (
-                  <SelectItem key={l} value={String(l)}>
-                    JLPT {levelLabel(l)}
-                  </SelectItem>
-                ))}
-                <SelectItem value={String(ALL_LEVELS)}>All levels</SelectItem>
-              </SelectGroup>
-            </SelectContent>
-          </Select>
-          <Select
-            value={Number.isFinite(newLimit) ? String(newLimit) : "all"}
-            onValueChange={(v) => changeSize(v === "all" ? Infinity : Number(v))}
-          >
-            <SelectTrigger className="w-36" aria-label="New cards per session">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                {SESSION_SIZE_OPTIONS.map((n) => (
-                  <SelectItem key={String(n)} value={Number.isFinite(n) ? String(n) : "all"}>
-                    {Number.isFinite(n) ? `${n} / session` : "All new cards"}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
-        </div>
+        {isAll ? (
+          <span className="text-sm text-muted-foreground">
+            All kanji · newest first
+          </span>
+        ) : (
+          <div className="flex items-center gap-2">
+            <Select value={String(level)} onValueChange={(v) => changeLevel(Number(v))}>
+              <SelectTrigger className="w-32" aria-label="JLPT level">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  {JLPT_LEVELS.map((l) => (
+                    <SelectItem key={l} value={String(l)}>
+                      JLPT {levelLabel(l)}
+                    </SelectItem>
+                  ))}
+                  <SelectItem value={String(ALL_LEVELS)}>All levels</SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <Select
+              value={Number.isFinite(newLimit) ? String(newLimit) : "all"}
+              onValueChange={(v) => changeSize(v === "all" ? Infinity : Number(v))}
+            >
+              <SelectTrigger className="w-36" aria-label="New cards per session">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  {SESSION_SIZE_OPTIONS.map((n) => (
+                    <SelectItem key={String(n)} value={Number.isFinite(n) ? String(n) : "all"}>
+                      {Number.isFinite(n) ? `${n} / session` : "All new cards"}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          </div>
+        )}
         {reviewedCount > 0 && (
           <span className="text-sm text-muted-foreground">{reviewedCount} reviewed</span>
         )}
@@ -307,7 +342,9 @@ export default function SmartKanjiDeck({ active = true }: { active?: boolean }) 
             <EmptyTitle>
               {reviewedCount > 0
                 ? "Session complete"
-                : `All caught up${level !== ALL_LEVELS ? ` — ${levelLabel(level)}` : ""}`}
+                : isAll
+                  ? "All caught up"
+                  : `All caught up${level !== ALL_LEVELS ? ` — ${levelLabel(level)}` : ""}`}
             </EmptyTitle>
             <EmptyDescription>
               {reviewedCount > 0 && (
@@ -316,15 +353,17 @@ export default function SmartKanjiDeck({ active = true }: { active?: boolean }) 
                   {lapsedIds.size > 0 ? ` · ${lapsedIds.size} revisited` : ""}.{" "}
                 </>
               )}
-              {(() => {
-                const pool = allCards.filter((c) => matchesLevel(c, level));
-                if (pool.length === 0)
-                  return "No kanji at this level yet — add words with kanji of this level, or pick a broader level.";
-                const next = nextDueAt(pool, now);
-                return next != null
-                  ? `Next review in ${humanizeUntil(next - now)}.`
-                  : "Add more words to keep studying.";
-              })()}
+              {isAll
+                ? "That's every kanji you're studying — go again to loop back through."
+                : (() => {
+                    const pool = allCards.filter((c) => matchesLevel(c, level));
+                    if (pool.length === 0)
+                      return "No kanji at this level yet — add words with kanji of this level, or pick a broader level.";
+                    const next = nextDueAt(pool, now);
+                    return next != null
+                      ? `Next review in ${humanizeUntil(next - now)}.`
+                      : "Add more words to keep studying.";
+                  })()}
             </EmptyDescription>
           </EmptyHeader>
           <Button variant="outline" className="gap-2" onClick={restart}>
@@ -416,7 +455,7 @@ export default function SmartKanjiDeck({ active = true }: { active?: boolean }) 
               />
             </div>
             <span className="text-xs text-muted-foreground">
-              {remaining.length} left · {levelLabel(level)}
+              {remaining.length} left{isAll ? "" : ` · ${levelLabel(level)}`}
             </span>
           </div>
         </>

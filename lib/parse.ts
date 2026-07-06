@@ -3,9 +3,10 @@ import * as XLSX from "xlsx";
 import mammoth from "mammoth";
 import type { VocabInput } from "./types";
 
-// The text columns an import file can carry. `study_as_kanji` is a UI toggle, not
-// an importable cell, so it's excluded from header detection / positional mapping.
-type ImportField = Exclude<keyof VocabInput, "study_as_kanji">;
+// The text columns an import file can carry. `study_as_kanji` (a UI toggle) and
+// `kanji_selection` (chosen in the Add-word breakdown) are not importable cells,
+// so they're excluded from header detection / positional mapping.
+type ImportField = Exclude<keyof VocabInput, "study_as_kanji" | "kanji_selection">;
 
 // Map flexible header names (any language/casing) onto our canonical fields.
 const HEADER_SYNONYMS: Record<ImportField, string[]> = {

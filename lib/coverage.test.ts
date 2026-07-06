@@ -11,7 +11,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildSession } from "./srs.ts";
-import { ALL_LEVELS, JLPT_LEVELS, kanjiChars, matchesLevel } from "./kanji-deck.ts";
+import {
+  ALL_LEVELS,
+  JLPT_LEVELS,
+  groupByKanji,
+  kanjiChars,
+  matchesLevel,
+} from "./kanji-deck.ts";
 
 const DAY = 86_400_000;
 const T = Date.parse("2026-06-28T00:00:00.000Z");
@@ -141,4 +147,57 @@ test("AC9: kanjiChars extracts every kanji of a word", () => {
   assert.deepEqual(kanjiChars("食べる"), ["食"]);
   assert.deepEqual(kanjiChars("林林森"), ["林", "森"]); // de-duplicated, order kept
   assert.deepEqual(kanjiChars("ひらがなABC"), []); // no kanji → nothing dropped, nothing invented
+});
+
+// ===========================================================================
+// "All Kanjis" review — grouping coverage (groupByKanji)
+// ===========================================================================
+
+const kc = (character: string, word: string) => ({ character, word });
+
+// AC10 — same kanji's cards end up consecutive, and every input card survives
+// exactly once (grouping reorders, it never drops or duplicates).
+test("AC10: groupByKanji clusters each kanji's cards, keeping all of them", () => {
+  const input = [
+    kc("来", "来週"),
+    kc("日", "日本"),
+    kc("来", "来年"),
+    kc("本", "本"),
+    kc("日", "毎日"),
+    kc("来", "未来"),
+  ];
+  const out = groupByKanji(input);
+  // Same count, same set — nothing lost or invented.
+  assert.equal(out.length, input.length);
+  assert.deepEqual(
+    out.map((c) => c.word).sort(),
+    input.map((c) => c.word).sort()
+  );
+  // Each character occupies one contiguous run.
+  const runs = out.map((c) => c.character).filter((ch, i, a) => ch !== a[i - 1]);
+  assert.equal(new Set(runs).size, runs.length, "no character appears in two runs");
+});
+
+// AC11 — groups appear in first-appearance order; within a group, input order is
+// preserved. Feeding a newest-first list therefore yields newest-first groups.
+test("AC11: groupByKanji preserves first-appearance + within-group order", () => {
+  const input = [
+    kc("来", "来週"), // 来 seen first
+    kc("日", "日本"), // 日 seen second
+    kc("来", "来年"),
+    kc("日", "毎日"),
+  ];
+  assert.deepEqual(groupByKanji(input), [
+    kc("来", "来週"),
+    kc("来", "来年"),
+    kc("日", "日本"),
+    kc("日", "毎日"),
+  ]);
+});
+
+// AC12 — degenerate inputs are safe.
+test("AC12: groupByKanji handles empty and all-distinct inputs", () => {
+  assert.deepEqual(groupByKanji([]), []);
+  const distinct = [kc("日", "日"), kc("本", "本"), kc("語", "語")];
+  assert.deepEqual(groupByKanji(distinct), distinct); // nothing to cluster → unchanged
 });

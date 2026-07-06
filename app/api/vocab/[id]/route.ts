@@ -19,7 +19,7 @@ export async function PATCH(request: Request, { params }: Params) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const update: Record<string, string | boolean | null> = {};
+  const update: Record<string, string | boolean | string[] | null> = {};
   for (const key of ["kanji", "romaji", "english", "tips", "category"] as const) {
     if (key in body) {
       const val = body[key]?.toString().trim() ?? "";
@@ -29,6 +29,13 @@ export async function PATCH(request: Request, { params }: Params) {
   // Boolean opt-in for the kanji deck — kept out of the string-trim loop above.
   if (typeof body.study_as_kanji === "boolean") {
     update.study_as_kanji = body.study_as_kanji;
+  }
+  // Curated per-kanji study set (migration 0006). An array replaces the set;
+  // null clears it back to sync's all-graded default.
+  if ("kanji_selection" in body) {
+    update.kanji_selection = Array.isArray(body.kanji_selection)
+      ? body.kanji_selection.filter((c): c is string => typeof c === "string")
+      : null;
   }
   if (update.kanji === "") {
     return NextResponse.json({ error: "Kanji cannot be empty." }, { status: 400 });

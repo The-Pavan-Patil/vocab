@@ -11,6 +11,7 @@ import {
   type DictEntry,
   type VocabInput,
 } from "@/lib/types";
+import KanjiBreakdown from "@/components/KanjiBreakdown";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -76,6 +77,8 @@ export default function DictionarySearch({ onAdded }: { onAdded: () => void }) {
   // Add-to-vocab dialog.
   const [draft, setDraft] = useState<VocabInput | null>(null);
   const [saving, setSaving] = useState(false);
+  // Kanji chosen in the dialog's breakdown (only when "study as kanji" is on).
+  const [draftSelection, setDraftSelection] = useState<string[]>([]);
 
   // Close the Add dialog when this tab is hidden by <Activity>. The dialog
   // renders into a portal on document.body — outside the Activity boundary — so
@@ -128,7 +131,9 @@ export default function DictionarySearch({ onAdded }: { onAdded: () => void }) {
     if (!draft) return;
     setSaving(true);
     try {
-      const { inserted } = await createVocab(draft);
+      // Persist the curated kanji set only when studying this word as kanji.
+      const kanji_selection = draft.study_as_kanji ? draftSelection : null;
+      const { inserted } = await createVocab({ ...draft, kanji_selection });
       if (inserted) {
         toast.success("Added to vocab list", { description: draft.kanji });
       } else {
@@ -216,7 +221,10 @@ export default function DictionarySearch({ onAdded }: { onAdded: () => void }) {
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={() => setDraft(entryToVocabInput(entry))}
+                      onClick={() => {
+                        setDraft(entryToVocabInput(entry));
+                        setDraftSelection([]);
+                      }}
                       aria-label={`Add ${entry.word} to vocab`}
                     >
                       <Plus aria-hidden />
@@ -426,6 +434,9 @@ export default function DictionarySearch({ onAdded }: { onAdded: () => void }) {
                   }
                 />
               </Field>
+              {draft.study_as_kanji && (
+                <KanjiBreakdown word={draft.kanji} onChange={setDraftSelection} />
+              )}
             </FieldGroup>
           )}
           <DialogFooter>
