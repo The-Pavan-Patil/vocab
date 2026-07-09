@@ -34,8 +34,11 @@ Next.js (App Router, TS) · Tailwind CSS v4 · Supabase (Postgres) · `docx`, `p
 - **Authentication → Providers → Email:** enable it, and turn **"Confirm email" OFF** for the
   smoothest sign-up (the free-tier email sender is rate-limited; the login UI handles both modes).
 - **Authentication → Sign In / Providers:** keep **"Allow new users to sign up" ON** (open sign-up).
-- **Authentication → URL Configuration:** set the **Site URL** and add **Redirect URLs** for your
-  origins, e.g. `http://localhost:3000/**` (and your ngrok HTTPS origin if you tunnel the dev server).
+- **Authentication → URL Configuration:** set the **Site URL** to your production origin (not
+  `localhost`), and add **Redirect URLs** for every origin you use, e.g.
+  `https://your-domain.com/**`, `http://localhost:3000/**` (and your ngrok HTTPS origin if you
+  tunnel the dev server). Password-reset links use the deployed site URL; if the production origin
+  is missing here, Supabase falls back to Site URL (often `localhost`).
 
 ### 3. Configure environment
 ```bash
@@ -45,7 +48,10 @@ Fill in:
 ```
 NEXT_PUBLIC_SUPABASE_URL=https://<your-project>.supabase.co
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<your-publishable-key>
+NEXT_PUBLIC_SITE_URL=https://your-domain.com
 ```
+`NEXT_PUBLIC_SITE_URL` is optional locally (the app derives the origin from the request). Set it in
+production so password-reset emails always link to your deployed site.
 Per-user data isolation is enforced by Row Level Security, so the publishable key is all the app
 needs — no service-role key is stored in the app.
 

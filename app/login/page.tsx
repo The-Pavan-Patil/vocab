@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { sendPasswordResetEmail } from "@/app/login/actions";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -54,10 +55,7 @@ export default function LoginPage() {
     setBusy(true);
     try {
       if (isForgot) {
-        const { error } = await supabase.auth.resetPasswordForEmail(email, {
-          redirectTo: `${window.location.origin}/auth/callback?next=/reset-password`,
-        });
-        if (error) throw error;
+        await sendPasswordResetEmail(email);
         setResetSent(true);
       } else if (isSignup) {
         const { data, error } = await supabase.auth.signUp({ email, password });
