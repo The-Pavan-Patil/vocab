@@ -354,92 +354,97 @@ export default function DictionarySearch({ onAdded }: { onAdded: () => void }) {
 
       {/* Add → quick edit dialog */}
       <Dialog open={draft !== null} onOpenChange={(o) => !o && setDraft(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Add to vocab list</DialogTitle>
-            <DialogDescription>
-              Tweak anything (e.g. add a Marathi tip) before saving.
-            </DialogDescription>
-          </DialogHeader>
-          {draft && (
-            <FieldGroup>
-              <Field>
-                <FieldLabel htmlFor="d-kanji">Kanji / Word</FieldLabel>
-                <Input
-                  id="d-kanji"
-                  className="jp text-lg"
-                  value={draft.kanji}
-                  onChange={(e) => setField("kanji", e.target.value)}
-                />
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="d-romaji">Romaji</FieldLabel>
-                <Input
-                  id="d-romaji"
-                  value={draft.romaji ?? ""}
-                  onChange={(e) => setField("romaji", e.target.value)}
-                />
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="d-english">English meaning</FieldLabel>
-                <Input
-                  id="d-english"
-                  value={draft.english ?? ""}
-                  onChange={(e) => setField("english", e.target.value)}
-                />
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="d-tips">Tip (Marathi)</FieldLabel>
-                <Input
-                  id="d-tips"
-                  value={draft.tips ?? ""}
-                  onChange={(e) => setField("tips", e.target.value)}
-                  placeholder="खाणे"
-                />
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="d-category">Category</FieldLabel>
-                <Select
-                  value={draft.category ?? undefined}
-                  onValueChange={(v) => setField("category", v)}
-                >
-                  <SelectTrigger id="d-category" className="w-full">
-                    <SelectValue placeholder="Select a category" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      {CATEGORIES.map((c) => (
-                        <SelectItem key={c} value={c}>
-                          {c}
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-              </Field>
-              <Field orientation="horizontal">
-                <FieldContent>
-                  <FieldLabel htmlFor="d-study-kanji">
-                    Also study as Kanji
-                  </FieldLabel>
-                  <FieldDescription>
-                    Adds a kanji-only card to the Kanji tab.
-                  </FieldDescription>
-                </FieldContent>
-                <Switch
-                  id="d-study-kanji"
-                  checked={draft.study_as_kanji ?? false}
-                  onCheckedChange={(v) =>
-                    setDraft((d) => (d ? { ...d, study_as_kanji: v } : d))
-                  }
-                />
-              </Field>
-              {draft.study_as_kanji && (
-                <KanjiBreakdown word={draft.kanji} onChange={setDraftSelection} />
-              )}
-            </FieldGroup>
-          )}
-          <DialogFooter>
+        <DialogContent className="overflow-hidden">
+          <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Add to vocab list</DialogTitle>
+              <DialogDescription>
+                Tweak anything (e.g. add a Marathi tip) before saving.
+              </DialogDescription>
+            </DialogHeader>
+            {draft && (
+              <FieldGroup>
+                <Field>
+                  <FieldLabel htmlFor="d-kanji">Kanji / Word</FieldLabel>
+                  <Input
+                    id="d-kanji"
+                    className="jp text-lg"
+                    value={draft.kanji}
+                    onChange={(e) => setField("kanji", e.target.value)}
+                  />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="d-romaji">Romaji</FieldLabel>
+                  <Input
+                    id="d-romaji"
+                    value={draft.romaji ?? ""}
+                    onChange={(e) => setField("romaji", e.target.value)}
+                  />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="d-english">English meaning</FieldLabel>
+                  <Input
+                    id="d-english"
+                    value={draft.english ?? ""}
+                    onChange={(e) => setField("english", e.target.value)}
+                  />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="d-tips">Tip (Marathi)</FieldLabel>
+                  <Input
+                    id="d-tips"
+                    value={draft.tips ?? ""}
+                    onChange={(e) => setField("tips", e.target.value)}
+                    placeholder="खाणे"
+                  />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="d-category">Category</FieldLabel>
+                  <Select
+                    value={draft.category ?? undefined}
+                    onValueChange={(v) => setField("category", v)}
+                  >
+                    <SelectTrigger id="d-category" className="w-full">
+                      <SelectValue placeholder="Select a category" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        {CATEGORIES.map((c) => (
+                          <SelectItem key={c} value={c}>
+                            {c}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field orientation="horizontal">
+                  <FieldContent>
+                    <FieldLabel htmlFor="d-study-kanji">
+                      Also study as Kanji
+                    </FieldLabel>
+                    <FieldDescription>
+                      Adds a kanji-only card to the Kanji tab.
+                    </FieldDescription>
+                  </FieldContent>
+                  <Switch
+                    id="d-study-kanji"
+                    checked={draft.study_as_kanji ?? false}
+                    onCheckedChange={(v) =>
+                      setDraft((d) => (d ? { ...d, study_as_kanji: v } : d))
+                    }
+                  />
+                </Field>
+                {draft.study_as_kanji && (
+                  <KanjiBreakdown
+                    word={draft.kanji}
+                    onChange={setDraftSelection}
+                  />
+                )}
+              </FieldGroup>
+            )}
+          </div>
+          <DialogFooter className="shrink-0">
             <Button variant="ghost" onClick={() => setDraft(null)}>
               Cancel
             </Button>
