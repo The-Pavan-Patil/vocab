@@ -106,9 +106,14 @@ ease -= 0.20                                      // future gaps grow more slowl
 interval = 0                                      // due immediately → reappears today
 ```
 
-`due_at = now + interval_days`. Example trajectory of a card answered correctly
-each time (ease 2.5): **2d → 6d → 15d → 38d → 94d → …** A `wrong` at any point
-resets it to ~daily and lowers the ease.
+`due_at = now + interval_days`. A card answered **Got it** each time follows
+**1d → 6d → 15d → 38d → 95d → …** at ease 2.5; a confident **I remember**
+starts at 2 days and also raises ease. A `wrong` at any point resets it to
+immediate relearning and lowers the ease.
+
+Intervals are capped before calculating `due_at`: 36,500 days for word cards and
+18,250 days for Kanji cards. This keeps long-lived schedules within a usable date
+range instead of eventually producing invalid timestamps.
 
 All tunable constants live at the top of `lib/srs.ts` (`EASE_*`,
 `FIRST_INTERVAL`, `SECOND_INTERVAL`, `RELEARN_GAP`, `NEW_CARDS_PER_SESSION`).
@@ -164,19 +169,24 @@ cards to the live queue without resetting the running tally.
 components/Flashcards.tsx ──POST /api/vocab/[id]/review { grade, practice } ──▶
   app/api/vocab/[id]/review/route.ts
      ├─ load card SRS state (RLS-scoped)
-     ├─ if (practice && isEarly): log the rep, return card UNCHANGED (no reschedule)
+     ├─ if (practice && isEarly): keep the schedule unchanged
      ├─ else schedule(prev, grade, now)    ← lib/srs.ts (source of truth)
-     ├─ UPDATE vocab  SET ease, interval_days, reps, lapses, state, due_at, last_reviewed_at
-     └─ INSERT reviews (append-only log)
+     └─ RPC commit_vocab_review
+          ├─ lock + reject stale concurrent reviews
+          ├─ UPDATE the selected schedule
+          └─ INSERT reviews in the same transaction
   ◀── returns updated card
 ```
 
 - **Scheduler is server-side.** The client only sends a grade and trusts the
   returned card; it never computes intervals. This keeps one source of truth and
   prevents client clock skew from corrupting schedules.
-- **Optimistic UI.** The component advances immediately and persists in the
-  background for snappiness; a failed save surfaces an inline error (the card's
-  server-side schedule is simply unchanged and reappears next load).
+- **Optimistic, recoverable UI.** The component advances immediately, allows one
+  review request at a time, and restores the exact prior queue/progress if saving
+  fails.
+- **Atomic persistence.** Migration `0008_atomic_reviews.sql` commits the schedule
+  and history together. Concurrent requests based on stale state return `409`
+  instead of overwriting a newer review.
 - **`reviews` table.** Append-only log of every grade with interval/ease
   snapshots and `elapsed_days`. Not read by the scheduler today — it exists so a
   future FSRS upgrade and stats views have the history they need.
@@ -193,6 +203,7 @@ components/Flashcards.tsx ──POST /api/vocab/[id]/review { grade, practice } 
 | `lib/types.ts` → `Vocab`, `Grade`         | SRS fields on the row + grade type                |
 | `lib/decks.ts`                            | Deck ↔ column adapter (word vs kanji track)       |
 | `supabase/0004_kanji.sql`                 | `study_as_kanji` + `kanji_*` cols + `reviews.mode`|
+| `supabase/0008_atomic_reviews.sql`        | Transactional schedule + history commit RPCs      |
 
 ---
 
@@ -214,7 +225,8 @@ in one never moves the other's schedule.
 
 **Same algorithm, per-deck tuning.** Both decks call the *same* `schedule()`;
 only the constants differ. `KANJI_TUNING` is deliberately more conservative
-(1-day first step, 4-day second step, ease ceiling 2.5) because recalling a
+(1 day after reveal-and-confirm, 2 days after confident recall, a 4-day second
+step, and ease ceiling 2.6) because recalling a
 reading + meaning from the bare glyph is harder, so kanji come back sooner and
 their gaps grow more slowly. The tuning is an optional, defaulted parameter
 (`schedule(prev, grade, now, tuning = WORD_TUNING)`), so the word path is
@@ -245,7 +257,7 @@ option to revise every kanji at once.
 add 食べる (toggle on) ──▶ POST /api/kanji-cards/sync
   ├─ extract kanji (食) ──▶ getKanji() ── kanjiapi.dev /v1/kanji + /v1/words ──▶ `kanji` cache (jlpt, readings, example words)
   ├─ segment(食べる) ── kuroshiro furigana ──▶ 食 = た
-  └─ upsert kanji_cards { character:食, jlpt, word:食べる, reading:た, … }  (idempotent)
+  └─ reconcile kanji_cards { vocab_id, character:食, word:食べる, reading:た, … }
 
 Smart Kanji tab ─ JLPT selector (cumulative N5…N1 + All) ─ buildSession(cards.filter(jlpt>=level)) ─ schedule(KANJI_TUNING)
 ```
@@ -258,9 +270,17 @@ Smart Kanji tab ─ JLPT selector (cumulative N5…N1 + All) ─ buildSession(ca
   `parseFuriganaHtml`. Best-effort: jukujikun (今日=きょう) stay an unsplit run, so
   no wrong per-character reading is invented — the card falls back to the word
   reading.
-- **Population is automatic + idempotent.** `lib/kanji-sync.ts` runs on deck load
-  (and after adds); only kanji that HAVE a JLPT level become cards. Re-syncing
-  never resets an existing card's schedule (`ignoreDuplicates`).
+- **Selection is explicit when curated.** The picker defaults JLPT-graded kanji
+  on and ungraded kanji off. Once the user saves an array, exactly those kanji
+  become active cards; explicitly selected ungraded kanji are allowed and appear
+  under **All levels**.
+- **Population is automatic + lossless.** `lib/kanji-sync.ts` reconciles after
+  create/edit/toggle operations and performs a full backfill on first deck load.
+  Card identity is `(user, vocab_id, character)`, so word/meaning/reading metadata
+  can change without resetting SRS state. Deselected cards become inactive rather
+  than being deleted; reselecting restores the same schedule.
+- **Live sessions are stable.** Server refreshes replace card data inside the
+  current queue without rebuilding its order, progress, or forgotten-card repeats.
 - **kanjiapi.dev** (no key, KANJIDIC2/JMdict) also replaces Jisho for the
   dictionary's per-kanji breakdown. `lib/kanjiapi.ts` normalizes it; the `kanji`
   table caches it. The existing word-level kanji deck (§4a) is untouched — the one
@@ -271,9 +291,12 @@ Smart Kanji tab ─ JLPT selector (cumulative N5…N1 + All) ─ buildSession(ca
 | File | Role |
 | ---- | ---- |
 | `supabase/0005_kanji_smart.sql` | `kanji` cache + `kanji_cards` + `reviews.kanji_card_id` |
+| `supabase/0006_kanji_selection.sql` | Per-word curated character arrays |
+| `supabase/0007_kanji_reconciliation.sql` | Stable card identity + inactive-card history preservation |
+| `supabase/0008_atomic_reviews.sql` | Atomic Smart Kanji review commits |
 | `lib/kanjiapi.ts` | kanjiapi.dev fetch + normalize + DB cache |
 | `lib/furigana.ts` | kuroshiro furigana → per-kanji reading |
-| `lib/kanji-sync.ts` | toggled words → `kanji_cards` (idempotent) |
+| `lib/kanji-sync.ts` | Desired selections ↔ active/inactive `kanji_cards` reconciliation |
 | `app/api/kanji/[char]/route.ts` | cached kanji lookup |
 | `app/api/kanji-cards/{route,sync,[id]/review}.ts` | list · reconcile · review |
 | `components/SmartKanjiDeck.tsx` | study UI + JLPT selector |
@@ -282,11 +305,11 @@ Smart Kanji tab ─ JLPT selector (cumulative N5…N1 + All) ─ buildSession(ca
 
 ## 5. To enable it
 
-Run `supabase/0003_srs.sql`, then `0004_kanji.sql`, then `0005_kanji_smart.sql`,
-once each in the Supabase SQL editor (after `0002_auth_rls.sql`). They're
-idempotent. Existing cards get the defaults and are treated as new, so they enter
-the rotation immediately; `0004`/`0005` leave words out of the kanji decks until
-you toggle `study_as_kanji`.
+After `0002_auth_rls.sql`, run `0003_srs.sql` through
+`0008_atomic_reviews.sql` in numeric order. Existing cards keep their schedules;
+`0007` consolidates any legacy rename duplicates by keeping the most recently
+reviewed/mature schedule and reattaching the merged review history. Words remain outside Kanji decks until
+`study_as_kanji` is enabled.
 
 ---
 
@@ -297,7 +320,7 @@ you toggle `study_as_kanji`.
   the scheduler is isolated behind one function. This is the main reason the
   `reviews` table (with `elapsed_days`, interval/ease snapshots) exists now.
 - **Per-user settings.** The new-card batch size is now a per-browser selector
-  (`localStorage`, `vocab:sessionSize`); target retention and learning steps are
+  (`localStorage`, `vocab:sessionSize:<mode>` / `kanji:sessionSize`); target retention and learning steps are
   still constants. A server-side settings table would sync these across devices.
 - **Stats view.** Retention %, streaks, and "cards maturing" all derive from the
   `reviews` log.
@@ -309,4 +332,3 @@ you toggle `study_as_kanji`.
   the due set on the server.
 - **Leech handling.** Cards with many `lapses` could be flagged/suspended for
   reformulation (the `lapses` counter is already tracked).
-```

@@ -47,3 +47,18 @@ export function groupByKanji<T extends { character: string }>(cards: T[]): T[] {
   }
   return [...groups.values()].flat();
 }
+
+/**
+ * Refresh the data attached to a live queue without rebuilding its membership or
+ * order. Repeated entries (a forgotten card queued for relearning) stay repeated;
+ * cards no longer present in the active deck are removed.
+ */
+export function refreshQueuedKanjiCards<T extends { id: string }>(
+  queue: T[],
+  activeCards: T[]
+): T[] {
+  const latest = new Map(activeCards.map((card) => [card.id, card]));
+  return queue
+    .map((card) => latest.get(card.id))
+    .filter((card): card is T => card !== undefined);
+}

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/supabase/require-user";
 import { isEarly, schedule, KANJI_TUNING, WORD_TUNING, type Grade } from "@/lib/srs";
-import { readSrs, writeSrs, type StudyMode } from "@/lib/decks";
+import { readSrs, type StudyMode } from "@/lib/decks";
 
 export const runtime = "nodejs";
 
@@ -62,60 +62,54 @@ export async function POST(request: Request, { params }: Params) {
   // sane defaults so a pre-migration / partially-populated row is treated as new.
   const prev = readSrs(card, mode);
 
-  // Practice (cram) review of an EARLY card: don't move the schedule — reviewing
-  // before a card is due must not inflate its interval. We still log the rep
-  // (interval/ease unchanged) for history, then return the card untouched.
-  if (practice && isEarly(prev, reviewedAt)) {
-    const elapsed_days = prev.last_reviewed_at
-      ? (reviewedAt - Date.parse(prev.last_reviewed_at)) / 86_400_000
-      : null;
-    const { error: logErr } = await auth.supabase.from("reviews").insert({
-      vocab_id: id,
-      user_id: auth.user.id,
-      grade,
-      mode,
-      interval_before: prev.interval_days,
-      interval_after: prev.interval_days, // unchanged — practice doesn't reschedule
-      ease_after: prev.ease,
-      elapsed_days,
-    });
-    if (logErr) {
-      console.error("reviews insert failed:", logErr.message);
-    }
-    return NextResponse.json({ data: card });
-  }
+  const applySchedule = !(practice && isEarly(prev, reviewedAt));
+  const scheduled = applySchedule
+    ? schedule(prev, grade, reviewedAt, tuning)
+    : {
+        next: prev,
+        log: {
+          interval_before: prev.interval_days,
+          interval_after: prev.interval_days,
+          ease_after: prev.ease,
+          elapsed_days: prev.last_reviewed_at
+            ? (reviewedAt - Date.parse(prev.last_reviewed_at)) / 86_400_000
+            : null,
+        },
+      };
+  const { next, log } = scheduled;
 
-  const { next, log } = schedule(prev, grade, reviewedAt, tuning);
-
-  // Persist the new schedule to the chosen deck's columns only.
-  const { data: updated, error: updErr } = await auth.supabase
-    .from("vocab")
-    .update(writeSrs(next, mode))
-    .eq("id", id)
-    .select()
+  // The RPC locks the row and commits the selected deck's schedule plus its
+  // review-history row atomically. A stale concurrent review returns 409.
+  const { data: updated, error: commitError } = await auth.supabase
+    .rpc("commit_vocab_review", {
+      p_vocab_id: id,
+      p_mode: mode,
+      p_expected_last_reviewed_at: prev.last_reviewed_at,
+      p_apply_schedule: applySchedule,
+      p_ease: next.ease,
+      p_interval_days: next.interval_days,
+      p_reps: next.reps,
+      p_lapses: next.lapses,
+      p_state: next.state,
+      p_due_at: next.due_at,
+      p_last_reviewed_at: next.last_reviewed_at,
+      p_grade: grade,
+      p_interval_before: log.interval_before,
+      p_interval_after: log.interval_after,
+      p_ease_after: log.ease_after,
+      p_elapsed_days: log.elapsed_days,
+      p_reviewed_at: new Date(reviewedAt).toISOString(),
+    })
     .maybeSingle();
-  if (updErr) {
-    return NextResponse.json({ error: updErr.message }, { status: 500 });
+  if (commitError) {
+    const conflict = commitError.code === "40001";
+    return NextResponse.json(
+      { error: commitError.message },
+      { status: conflict ? 409 : 500 }
+    );
   }
   if (!updated) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
-  }
-
-  // Append to the review log. Stamp user_id explicitly to satisfy the RLS insert
-  // check. A logging failure shouldn't fail the review, so we don't block on it.
-  const { error: logErr } = await auth.supabase.from("reviews").insert({
-    vocab_id: id,
-    user_id: auth.user.id,
-    grade,
-    mode,
-    interval_before: log.interval_before,
-    interval_after: log.interval_after,
-    ease_after: log.ease_after,
-    elapsed_days: log.elapsed_days,
-  });
-  if (logErr) {
-    // Surface it in logs but still return success — the card itself is scheduled.
-    console.error("reviews insert failed:", logErr.message);
   }
 
   return NextResponse.json({ data: updated });

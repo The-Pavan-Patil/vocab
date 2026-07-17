@@ -41,12 +41,20 @@ export async function fetchVocab(): Promise<Vocab[]> {
   return json.data as Vocab[];
 }
 
-// Returns how many rows were actually created vs. skipped as already-present
+// Returns how many rows were created, updated, or skipped as already-present
 // duplicates (the server dedups on kanji), so callers can phrase their toast.
 export async function createVocab(
-  rows: VocabInput | VocabInput[]
-): Promise<{ inserted: number; skipped: number }> {
-  const body = Array.isArray(rows) ? { rows } : rows;
+  rows: VocabInput | VocabInput[],
+  options: { updateExisting?: boolean } = {}
+): Promise<{
+  inserted: number;
+  updated: number;
+  skipped: number;
+  syncWarning: string | null;
+}> {
+  const body = Array.isArray(rows)
+    ? { rows, update_existing: options.updateExisting === true }
+    : { ...rows, update_existing: options.updateExisting === true };
   const res = await fetch("/api/vocab", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -56,14 +64,17 @@ export async function createVocab(
   ensureOk(res, json, "Failed to save");
   return {
     inserted: (json.inserted as number) ?? 0,
+    updated: (json.updated as number) ?? 0,
     skipped: (json.skipped as number) ?? 0,
+    syncWarning:
+      typeof json.sync_warning === "string" ? json.sync_warning : null,
   };
 }
 
 export async function updateVocab(
   id: string,
   patch: Partial<VocabInput>
-): Promise<Vocab> {
+): Promise<{ data: Vocab; syncWarning: string | null }> {
   const res = await fetch(`/api/vocab/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
@@ -71,7 +82,11 @@ export async function updateVocab(
   });
   const json = await parseJson(res);
   ensureOk(res, json, "Failed to update");
-  return json.data as Vocab;
+  return {
+    data: json.data as Vocab,
+    syncWarning:
+      typeof json.sync_warning === "string" ? json.sync_warning : null,
+  };
 }
 
 export async function deleteVocab(id: string): Promise<void> {
@@ -113,12 +128,22 @@ export async function fetchKanjiCards(): Promise<KanjiCard[]> {
   return (json.data as KanjiCard[]) ?? [];
 }
 
-// Reconcile the smart deck from the user's toggled words. Returns new-card count.
-export async function syncKanjiCards(): Promise<{ created: number }> {
+// Fully reconcile the smart deck from the user's current words/selections.
+export async function syncKanjiCards(): Promise<{
+  created: number;
+  updated: number;
+  activated: number;
+  deactivated: number;
+}> {
   const res = await fetch("/api/kanji-cards/sync", { method: "POST" });
   const json = await parseJson(res);
   ensureOk(res, json, "Failed to sync kanji deck");
-  return { created: (json.created as number) ?? 0 };
+  return {
+    created: (json.created as number) ?? 0,
+    updated: (json.updated as number) ?? 0,
+    activated: (json.activated as number) ?? 0,
+    deactivated: (json.deactivated as number) ?? 0,
+  };
 }
 
 export async function reviewKanjiCard(

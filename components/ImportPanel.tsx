@@ -122,10 +122,15 @@ export default function ImportPanel({
     if (newCount === 0) return;
     setBusy(true);
     try {
-      const { inserted: n } = await createVocab(
+      const { inserted: n, syncWarning } = await createVocab(
         newRows.map((r) => ({ ...r, study_as_kanji: studyAllAsKanji }))
       );
       toast.success(`Imported ${n} new word${n === 1 ? "" : "s"}`);
+      if (syncWarning) {
+        toast.warning("Imported, but Kanji sync needs a retry", {
+          description: syncWarning,
+        });
+      }
       setRows((rs) => {
         const remaining = (rs ?? []).filter((r) => dupFor(r));
         return remaining.length ? remaining : null;
@@ -145,8 +150,13 @@ export default function ImportPanel({
     if (!dup) return;
     setBusy(true);
     try {
-      await updateVocab(dup.id, nonEmptyPatch(r));
+      const { syncWarning } = await updateVocab(dup.id, nonEmptyPatch(r));
       toast.success("Updated", { description: r.kanji });
+      if (syncWarning) {
+        toast.warning("Updated, but Kanji sync needs a retry", {
+          description: syncWarning,
+        });
+      }
       removeRow(i);
       onImported();
     } catch (e) {
@@ -162,12 +172,18 @@ export default function ImportPanel({
     if (targets.length === 0) return;
     setBusy(true);
     try {
-      await Promise.all(
+      const results = await Promise.all(
         targets.map((r) => updateVocab(dupFor(r)!.id, nonEmptyPatch(r)))
       );
       toast.success(
         `Updated ${targets.length} existing word${targets.length === 1 ? "" : "s"}`
       );
+      const syncWarning = results.find((result) => result.syncWarning)?.syncWarning;
+      if (syncWarning) {
+        toast.warning("Updated, but Kanji sync needs a retry", {
+          description: syncWarning,
+        });
+      }
       setRows((rs) => {
         const remaining = (rs ?? []).filter((r) => !dupFor(r));
         return remaining.length ? remaining : null;

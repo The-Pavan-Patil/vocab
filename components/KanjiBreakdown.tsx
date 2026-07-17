@@ -7,6 +7,11 @@ import { kanjiChars } from "@/lib/kanji-deck";
 import type { KanjiInfo } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
+import {
+  FieldDescription,
+  FieldLegend,
+  FieldSet,
+} from "@/components/ui/field";
 
 // Undefined = not yet requested/loaded, present (even as null) = settled.
 
@@ -24,9 +29,11 @@ function jlptBadge(jlpt: number | null | undefined): string {
 export default function KanjiBreakdown({
   word,
   onChange,
+  initialSelection = null,
 }: {
   word: string;
   onChange: (selection: string[]) => void;
+  initialSelection?: string[] | null;
 }) {
   // `info` caches the kanjiapi lookup per character (undefined = loading, null =
   // no data); `overrides` holds the user's explicit on/off choices.
@@ -35,27 +42,34 @@ export default function KanjiBreakdown({
   const requested = useRef<Set<string>>(new Set());
 
   const chars = useMemo(() => kanjiChars(word ?? ""), [word]);
+  const charsKey = chars.join("");
+  const initialSelectionSet = useMemo(
+    () =>
+      initialSelection === null ? null : new Set(initialSelection),
+    [initialSelection]
+  );
 
   // Look up each not-yet-requested kanji's JLPT level (cached server-side).
   useEffect(() => {
-    if (chars.length === 0) return;
-    let cancelled = false;
-    for (const ch of chars) {
+    for (const ch of kanjiChars(charsKey)) {
       if (requested.current.has(ch)) continue;
       requested.current.add(ch);
       fetchKanji(ch)
-        .then((k) => !cancelled && setInfo((m) => ({ ...m, [ch]: k })))
-        .catch(() => !cancelled && setInfo((m) => ({ ...m, [ch]: null })));
+        .then((kanjiInfo) =>
+          setInfo((current) => ({ ...current, [ch]: kanjiInfo }))
+        )
+        .catch(() => setInfo((current) => ({ ...current, [ch]: null })));
     }
-    return () => {
-      cancelled = true;
-    };
-  }, [chars]);
+  }, [charsKey]);
 
-  // Effective on-state: the user's override if any, else the default (on for
-  // graded kanji, off for ungraded / still-loading).
+  // Effective on-state: the user's override if any, then an explicitly saved
+  // selection when editing, else the default (on for graded kanji).
   const isOn = (ch: string): boolean =>
-    ch in overrides ? overrides[ch] : info[ch]?.jlpt != null;
+    ch in overrides
+      ? overrides[ch]
+      : initialSelectionSet
+        ? initialSelectionSet.has(ch)
+        : info[ch]?.jlpt != null;
 
   // Report the effective selection up whenever it can change. onChange is read
   // through a ref (kept current in its own effect) so an inline parent callback
@@ -65,20 +79,35 @@ export default function KanjiBreakdown({
     onChangeRef.current = onChange;
   }, [onChange]);
   useEffect(() => {
+    // With the default selection, wait for every JLPT lookup to settle before
+    // reporting. This prevents a quick save from persisting an empty selection
+    // while the graded-on defaults are still loading.
+    if (
+      initialSelectionSet === null &&
+      chars.some((ch) => !(ch in info))
+    ) {
+      return;
+    }
     onChangeRef.current(
-      chars.filter((ch) => (ch in overrides ? overrides[ch] : info[ch]?.jlpt != null))
+      chars.filter((ch) =>
+        ch in overrides
+          ? overrides[ch]
+          : initialSelectionSet
+            ? initialSelectionSet.has(ch)
+            : info[ch]?.jlpt != null
+      )
     );
-  }, [chars, info, overrides]);
+  }, [chars, info, initialSelectionSet, overrides]);
 
   if (chars.length === 0) return null;
 
   return (
-    <div className="rounded-lg border border-border/70 bg-muted/30 p-3">
-      <p className="text-sm font-medium">Kanji to study</p>
-      <p className="mt-0.5 mb-3 text-xs text-muted-foreground">
+    <FieldSet className="gap-1 rounded-lg border border-border/70 bg-muted/30 p-3">
+      <FieldLegend variant="label">Kanji to study</FieldLegend>
+      <FieldDescription className="mb-2">
         Each becomes its own smart card. Graded kanji are on by default — turn off
         any you already know.
-      </p>
+      </FieldDescription>
       <ul className="flex flex-col gap-1">
         {chars.map((ch) => {
           const loaded = ch in info;
@@ -105,6 +134,6 @@ export default function KanjiBreakdown({
           );
         })}
       </ul>
-    </div>
+    </FieldSet>
   );
 }

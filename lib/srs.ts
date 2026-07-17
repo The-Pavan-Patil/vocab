@@ -61,6 +61,7 @@ export type SrsTuning = {
   easeDelta: Record<Grade, number>; // how each grade nudges the ease factor
   firstInterval: Record<"remember" | "right", number>; // days on the 1st pass
   secondInterval: number; // days on the 2nd pass (classic SM-2 step)
+  maxIntervalDays: number; // hard ceiling — avoids unusable/invalid far-future dates
 };
 
 /** Word deck — the canonical SM-2 defaults (unchanged from before). */
@@ -71,20 +72,23 @@ export const WORD_TUNING: SrsTuning = {
   // A confident "remember" earns a slightly longer first gap than a "right".
   firstInterval: { remember: 2, right: 1 },
   secondInterval: 6,
+  maxIntervalDays: 36_500,
 };
 
 /**
  * Kanji deck — recalling a reading + meaning from the bare glyph is harder, so
  * this is a deliberately MORE CONSERVATIVE starting point: shorter first gaps
  * and a lower ease ceiling, so kanji come back sooner and their gaps grow more
- * slowly. Tune these freely; the scheduler itself is shared.
+ * slowly. A confident front-side recall still earns a meaningful advantage over
+ * a reveal-and-confirm pass.
  */
 export const KANJI_TUNING: SrsTuning = {
   easeMin: 1.3,
-  easeMax: 2.5,
+  easeMax: 2.6,
   easeDelta: { remember: +0.1, right: 0.0, wrong: -0.2 },
-  firstInterval: { remember: 1, right: 1 },
+  firstInterval: { remember: 2, right: 1 },
   secondInterval: 4,
+  maxIntervalDays: 18_250,
 };
 
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
@@ -155,6 +159,7 @@ export function schedule(
     if (reps === 1) interval_days = tuning.firstInterval[grade];
     else if (reps === 2) interval_days = tuning.secondInterval;
     else interval_days = Math.round(interval_days * ease);
+    interval_days = clamp(interval_days, 1, tuning.maxIntervalDays);
     ease = clamp(ease + tuning.easeDelta[grade], tuning.easeMin, tuning.easeMax);
     state = "review";
   }

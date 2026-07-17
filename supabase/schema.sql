@@ -1,5 +1,6 @@
--- Run this once in the Supabase SQL editor (Dashboard → SQL Editor → New query).
--- Creates the single table used by the Japanese vocabulary study app.
+-- Base bootstrap schema. Run this first, then apply 0002_auth_rls.sql through
+-- 0008_atomic_reviews.sql in numeric order. Those migrations are the source of
+-- truth for the authenticated study decks and current schema.
 
 create extension if not exists "pgcrypto"; -- for gen_random_uuid()
 
@@ -15,5 +16,4 @@ create table if not exists vocab (
 
 create index if not exists vocab_created_at_idx on vocab (created_at desc);
 
--- No login is used; all access goes through server-side API routes that use the
--- service-role key. RLS is intentionally left disabled.
+-- Authentication ownership and RLS are added by 0002_auth_rls.sql.

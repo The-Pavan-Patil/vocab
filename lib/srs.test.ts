@@ -93,13 +93,13 @@ test("'right' trajectory compounds by ease after rep 2: 1 → 6 → 15 → 38 �
 
 // --- Per-deck tuning (the Kanji track) -------------------------------------
 // The Kanji deck reuses schedule() with KANJI_TUNING — same math, more
-// conservative constants: a 1-day first step, a 4-day second step, and a lower
-// 2.5 ease ceiling, so kanji come back sooner and grow more slowly.
+// conservative constants: 1–2 day first steps, a 4-day second step, and a lower
+// 2.6 ease ceiling, so kanji come back sooner and grow more slowly.
 
-test("KANJI_TUNING: first pass is 1 day for both 'remember' and 'right'", () => {
+test("KANJI_TUNING: confident recall earns 2 days; reveal-and-confirm earns 1", () => {
   assert.equal(
     schedule(newState(), "remember", T, KANJI_TUNING).next.interval_days,
-    1
+    2
   );
   assert.equal(
     schedule(newState(), "right", T, KANJI_TUNING).next.interval_days,
@@ -112,10 +112,17 @@ test("KANJI_TUNING: second pass uses the tighter 4-day step", () => {
   assert.equal(schedule(first, "right", T, KANJI_TUNING).next.interval_days, 4);
 });
 
-test("KANJI_TUNING: ease is capped at the lower 2.5 ceiling", () => {
+test("KANJI_TUNING: ease is capped at the lower 2.6 ceiling", () => {
   let s = newState();
   for (let i = 0; i < 6; i++) s = schedule(s, "remember", T, KANJI_TUNING).next;
-  assert.equal(s.ease, 2.5);
+  assert.equal(s.ease, 2.6);
+});
+
+test("intervals are capped before they can create unusable far-future dates", () => {
+  const mature = reviewed({ interval_days: 30_000, reps: 20, ease: 2.7 });
+  const { next } = schedule(mature, "right", T, WORD_TUNING);
+  assert.equal(next.interval_days, WORD_TUNING.maxIntervalDays);
+  assert.ok(Number.isFinite(Date.parse(next.due_at!)));
 });
 
 test("schedule() with no tuning arg behaves exactly like WORD_TUNING (back-compat)", () => {

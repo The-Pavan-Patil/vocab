@@ -1,69 +1,238 @@
 // ---------------------------------------------------------------------------
-// Smart-deck sync — turn `study_as_kanji` words into kanji_cards.
-//
-// For each toggled word, create one card per kanji (that has a JLPT level),
-// tagged with the kanji's level and its reading-in-this-word. Idempotent via the
-// (user_id, character, word) unique constraint, so re-running never resets an
-// existing card's schedule. Server-only (uses kanjiapi + kuroshiro).
+// Smart-deck reconciliation — project vocab selections into kanji_cards while
+// preserving each card's independent SRS schedule.
 // ---------------------------------------------------------------------------
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { Vocab } from "./types";
-import { getKanji } from "./kanjiapi";
-import { kanjiChars } from "./kanji-deck";
-import { segment, dottedReading, singleKanjiReadings } from "./furigana";
+import type { KanjiInfo, Vocab } from "./types.ts";
+import { getKanji } from "./kanjiapi.ts";
+import { kanjiChars } from "./kanji-deck.ts";
+import { selectionForWord } from "./kanji-selection.ts";
+import {
+  segment,
+  dottedReading,
+  singleKanjiReadings,
+  type FuriganaSegment,
+} from "./furigana.ts";
+
+export type ExistingKanjiCard = {
+  id: string;
+  vocab_id: string | null;
+  character: string;
+  active: boolean;
+};
+
+export type DesiredKanjiCard = {
+  user_id: string;
+  vocab_id: string;
+  character: string;
+  active: true;
+  jlpt: number | null;
+  word: string;
+  word_meaning: string | null;
+  reading?: string | null;
+  word_reading?: string | null;
+};
+
+export type KanjiSyncStats = {
+  created: number;
+  updated: number;
+  activated: number;
+  deactivated: number;
+};
+
+type KanjiSyncOptions = {
+  /** Full-deck reconciliation also deactivates cards outside `words`. */
+  full?: boolean;
+  dependencies?: {
+    getKanji: typeof getKanji;
+    segment: typeof segment;
+  };
+};
+
+const cardKey = (vocabId: string | null, character: string) =>
+  `${vocabId ?? ""}\u0000${character}`;
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  map: (item: T) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  async function worker() {
+    while (nextIndex < items.length) {
+      const index = nextIndex++;
+      results[index] = await map(items[index]);
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, () => worker())
+  );
+  return results;
+}
+
+/** Build desired active rows without touching the database. */
+export async function buildDesiredKanjiCards(
+  supabase: SupabaseClient,
+  userId: string,
+  words: Vocab[],
+  dependencies: NonNullable<KanjiSyncOptions["dependencies"]> = {
+    getKanji,
+    segment,
+  }
+): Promise<DesiredKanjiCard[]> {
+  const infoPromises = new Map<string, Promise<KanjiInfo | null>>();
+  const loadInfo = (character: string) => {
+    const pending = infoPromises.get(character);
+    if (pending) return pending;
+    const request = dependencies.getKanji(supabase, character);
+    infoPromises.set(character, request);
+    return request;
+  };
+
+  const toggled = words.filter((word) => word.study_as_kanji);
+  const rowsByWord = await mapWithConcurrency(toggled, 4, async (word) => {
+    const explicit = Array.isArray(word.kanji_selection);
+    const characters = explicit
+      ? selectionForWord(word.kanji, word.kanji_selection) ?? []
+      : kanjiChars(word.kanji);
+    if (characters.length === 0) return [];
+
+    let segments: FuriganaSegment[] | null = null;
+    try {
+      segments = await dependencies.segment(word.kanji);
+    } catch {
+      // Preserve previously-synced reading fields when analysis temporarily
+      // fails. New rows simply receive the database's null defaults.
+    }
+    const wordReading = segments ? dottedReading(segments) || null : null;
+    const readings = segments ? singleKanjiReadings(segments) : null;
+    const infos = await Promise.all(characters.map(loadInfo));
+
+    return characters.flatMap((character, index): DesiredKanjiCard[] => {
+      const info = infos[index];
+      if (!info || (!explicit && info.jlpt == null)) return [];
+      const row: DesiredKanjiCard = {
+        user_id: userId,
+        vocab_id: word.id,
+        character,
+        active: true,
+        jlpt: info.jlpt,
+        word: word.kanji,
+        word_meaning: word.english,
+      };
+      if (segments) {
+        row.reading = readings?.get(character) ?? null;
+        row.word_reading = wordReading;
+      }
+      return [row];
+    });
+  });
+
+  return rowsByWord.flat();
+}
+
+/** Pure plan used by reconciliation and characterization tests. */
+export function planKanjiReconciliation(
+  existing: ExistingKanjiCard[],
+  desired: DesiredKanjiCard[]
+): KanjiSyncStats & { deactivateIds: string[] } {
+  const existingByKey = new Map(
+    existing.map((card) => [cardKey(card.vocab_id, card.character), card])
+  );
+  const desiredKeys = new Set(
+    desired.map((card) => cardKey(card.vocab_id, card.character))
+  );
+  let created = 0;
+  let updated = 0;
+  let activated = 0;
+  for (const row of desired) {
+    const current = existingByKey.get(cardKey(row.vocab_id, row.character));
+    if (!current) created += 1;
+    else if (!current.active) activated += 1;
+    else updated += 1;
+  }
+  const deactivateIds = existing
+    .filter(
+      (card) =>
+        card.active && !desiredKeys.has(cardKey(card.vocab_id, card.character))
+    )
+    .map((card) => card.id);
+  return {
+    created,
+    updated,
+    activated,
+    deactivated: deactivateIds.length,
+    deactivateIds,
+  };
+}
 
 /**
- * Ensure kanji_cards exist for every `study_as_kanji` word in `words`. Returns
- * how many new cards were inserted (existing cards are left untouched).
+ * Reconcile some or all vocab rows with kanji_cards. Metadata and `active` are
+ * updated on conflict; SRS columns are intentionally absent, so their history is
+ * never reset. Deselected/toggled-off cards are retained as inactive.
  */
 export async function syncKanjiCards(
   supabase: SupabaseClient,
   userId: string,
-  words: Vocab[]
-): Promise<number> {
-  const toggled = words.filter((w) => w.study_as_kanji);
-  const rows: Record<string, unknown>[] = [];
+  words: Vocab[],
+  options: KanjiSyncOptions = {}
+): Promise<KanjiSyncStats> {
+  const vocabIds = [...new Set(words.map((word) => word.id))];
+  if (!options.full && vocabIds.length === 0) {
+    return { created: 0, updated: 0, activated: 0, deactivated: 0 };
+  }
 
-  for (const w of toggled) {
-    // The user's curated set when present (migration 0006), else every kanji in
-    // the word. An explicit selection is honored verbatim — including a kanji the
-    // user turned on that has no JLPT level (it just won't show in leveled buckets).
-    const explicit = w.kanji_selection != null;
-    const chars = explicit ? (w.kanji_selection as string[]) : kanjiChars(w.kanji);
-    if (chars.length === 0) continue;
+  const desired = await buildDesiredKanjiCards(
+    supabase,
+    userId,
+    words,
+    options.dependencies
+  );
 
-    const segs = await segment(w.kanji).catch(() => []);
-    // Stored dotted (い.く) so the card back can show the kanji reading apart
-    // from its okurigana.
-    const wordReading = dottedReading(segs) || null;
-    const readings = singleKanjiReadings(segs);
+  let existingQuery = supabase
+    .from("kanji_cards")
+    .select("id,vocab_id,character,active")
+    .eq("user_id", userId);
+  if (!options.full) existingQuery = existingQuery.in("vocab_id", vocabIds);
+  const { data: existingData, error: existingError } = await existingQuery;
+  if (existingError) throw new Error(existingError.message);
 
-    for (const ch of chars) {
-      const info = await getKanji(supabase, ch);
-      if (!info) continue; // not a real kanji
-      // Default (uncurated) path keeps the old rule: only JLPT-graded kanji, so
-      // the leveled deck stays clean. An explicit selection overrides that.
-      if (!explicit && info.jlpt == null) continue;
-      rows.push({
-        user_id: userId,
-        character: ch,
-        jlpt: info.jlpt,
-        word: w.kanji,
-        reading: readings.get(ch) ?? null,
-        word_reading: wordReading,
-        word_meaning: w.english,
-        vocab_id: w.id,
-      });
+  const existing = (existingData ?? []) as ExistingKanjiCard[];
+  const plan = planKanjiReconciliation(existing, desired);
+
+  if (desired.length > 0) {
+    // Keep failed-segmentation rows in a separate payload. PostgREST bulk rows
+    // share a column shape; mixing omitted reading fields with populated ones can
+    // turn the omissions into nulls and erase previously-known readings.
+    const withReadings = desired.filter((row) => "reading" in row);
+    const withoutReadings = desired.filter((row) => !("reading" in row));
+    for (const rows of [withReadings, withoutReadings]) {
+      if (rows.length === 0) continue;
+      const { error } = await supabase
+        .from("kanji_cards")
+        .upsert(rows, {
+          onConflict: "user_id,vocab_id,character",
+          ignoreDuplicates: false,
+        });
+      if (error) throw new Error(error.message);
     }
   }
 
-  if (rows.length === 0) return 0;
-  // ignoreDuplicates → never overwrite an existing card's SRS schedule.
-  const { data, error } = await supabase
-    .from("kanji_cards")
-    .upsert(rows, { onConflict: "user_id,character,word", ignoreDuplicates: true })
-    .select("id");
-  if (error) throw new Error(error.message);
-  return data?.length ?? 0;
+  if (plan.deactivateIds.length > 0) {
+    const { error } = await supabase
+      .from("kanji_cards")
+      .update({ active: false })
+      .eq("user_id", userId)
+      .in("id", plan.deactivateIds);
+    if (error) throw new Error(error.message);
+  }
+
+  return {
+    created: plan.created,
+    updated: plan.updated,
+    activated: plan.activated,
+    deactivated: plan.deactivated,
+  };
 }

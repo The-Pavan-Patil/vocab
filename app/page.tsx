@@ -19,8 +19,8 @@ import type { Vocab } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const TABS = [
-  { value: "add", label: "Add", short: "Add", icon: PencilLine },
   { value: "dictionary", label: "Dictionary", short: "Dict", icon: BookOpen },
+  { value: "add", label: "Add", short: "Add", icon: PencilLine },
   { value: "flashcards", label: "Flashcards", short: "Cards", icon: Layers },
   { value: "kanji", label: "Kanji", short: "Kanji", icon: Languages },
   { value: "smart-kanji", label: "Smart Kanji", short: "Smart", icon: Sparkles },
@@ -29,10 +29,14 @@ const TABS = [
 ];
 
 export default function Home() {
-  const [tab, setTab] = useState("add");
+  const [tab, setTab] = useState("dictionary");
   const [vocab, setVocab] = useState<Vocab[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [listReveal, setListReveal] = useState<{
+    word: string;
+    requestId: number;
+  } | null>(null);
 
   const reload = useCallback(async () => {
     setError(null);
@@ -64,6 +68,14 @@ export default function Home() {
     () => vocab.filter((v) => v.study_as_kanji).map((v) => deckCard(v, "kanji")),
     [vocab]
   );
+
+  const revealWordInList = useCallback((word: string) => {
+    setListReveal((current) => ({
+      word,
+      requestId: (current?.requestId ?? 0) + 1,
+    }));
+    setTab("list");
+  }, []);
 
   return (
     <TabsPrimitive.Root
@@ -124,7 +136,11 @@ export default function Home() {
         </TabsContent>
         <TabsContent value="dictionary" forceMount>
           <Activity mode={tab === "dictionary" ? "visible" : "hidden"}>
-            <DictionarySearch onAdded={reload} />
+            <DictionarySearch
+              vocab={vocab}
+              onAdded={reload}
+              onRevealInList={revealWordInList}
+            />
           </Activity>
         </TabsContent>
         <TabsContent value="flashcards" forceMount>
@@ -144,7 +160,11 @@ export default function Home() {
         </TabsContent>
         <TabsContent value="list" forceMount>
           <Activity mode={tab === "list" ? "visible" : "hidden"}>
-            <VocabTable vocab={vocab} onChanged={reload} />
+            <VocabTable
+              vocab={vocab}
+              onChanged={reload}
+              revealWord={listReveal}
+            />
           </Activity>
         </TabsContent>
         <TabsContent value="import" forceMount>

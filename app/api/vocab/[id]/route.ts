@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/supabase/require-user";
-import type { VocabInput } from "@/lib/types";
+import type { Vocab, VocabInput } from "@/lib/types";
+import {
+  selectionForWord,
+  validateKanjiSelection,
+} from "@/lib/kanji-selection";
+import { syncKanjiCards } from "@/lib/kanji-sync";
 
 export const runtime = "nodejs";
 
@@ -19,6 +24,20 @@ export async function PATCH(request: Request, { params }: Params) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
+  // Load the current word first so a selection-only PATCH can be validated
+  // against it, and a rename can remove characters no longer present.
+  const { data: current, error: currentError } = await auth.supabase
+    .from("vocab")
+    .select("*")
+    .eq("id", id)
+    .maybeSingle();
+  if (currentError) {
+    return NextResponse.json({ error: currentError.message }, { status: 500 });
+  }
+  if (!current) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
   const update: Record<string, string | boolean | string[] | null> = {};
   for (const key of ["kanji", "romaji", "english", "tips", "category"] as const) {
     if (key in body) {
@@ -30,12 +49,22 @@ export async function PATCH(request: Request, { params }: Params) {
   if (typeof body.study_as_kanji === "boolean") {
     update.study_as_kanji = body.study_as_kanji;
   }
-  // Curated per-kanji study set (migration 0006). An array replaces the set;
-  // null clears it back to sync's all-graded default.
+  const nextWord = (update.kanji as string | undefined) ?? current.kanji;
+  // An explicit array replaces the curated set; null restores the default of all
+  // JLPT-graded kanji. Invalid or unrelated characters are rejected.
   if ("kanji_selection" in body) {
-    update.kanji_selection = Array.isArray(body.kanji_selection)
-      ? body.kanji_selection.filter((c): c is string => typeof c === "string")
-      : null;
+    const result = validateKanjiSelection(nextWord, body.kanji_selection);
+    if (!result.ok) {
+      return NextResponse.json({ error: result.error }, { status: 400 });
+    }
+    update.kanji_selection = result.selection;
+  } else if ("kanji" in body && current.kanji_selection !== null) {
+    // Direct API clients may rename without sending a new selection. Retain only
+    // selected characters that still exist in the renamed word.
+    update.kanji_selection = selectionForWord(
+      nextWord,
+      current.kanji_selection
+    );
   }
   if (update.kanji === "") {
     return NextResponse.json({ error: "Kanji cannot be empty." }, { status: 400 });
@@ -54,7 +83,13 @@ export async function PATCH(request: Request, { params }: Params) {
   if (!data) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
-  return NextResponse.json({ data });
+  let syncWarning: string | null = null;
+  try {
+    await syncKanjiCards(auth.supabase, auth.user.id, [data as Vocab]);
+  } catch (syncError) {
+    syncWarning = (syncError as Error).message;
+  }
+  return NextResponse.json({ data: data as Vocab, sync_warning: syncWarning });
 }
 
 // DELETE /api/vocab/[id] — remove one of the user's records.

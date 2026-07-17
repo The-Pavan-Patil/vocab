@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Check,
   Clock,
@@ -25,6 +25,7 @@ import { reviewVocab } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   Empty,
   EmptyDescription,
@@ -98,6 +99,8 @@ export default function Flashcards({
   const [flipped, setFlipped] = useState(false);
   const [showHint, setShowHint] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [grading, setGrading] = useState(false);
+  const gradingRef = useRef(false);
 
   // Load the saved session size once on mount. The first render already used the
   // server default (100), so applying the stored value here is a safe
@@ -156,17 +159,20 @@ export default function Flashcards({
   // (Re)start a session against the latest schedules / a fresh clock. Runs in an
   // event handler, so reading Date.now() here is allowed.
   function restart() {
+    if (gradingRef.current) return;
     setNow(Date.now());
     setCram(true); // re-study now, ignoring due dates (see buildSession cram)
     setSessionId((n) => n + 1);
   }
   function changeCategory(next: string) {
+    if (gradingRef.current) return;
     setNow(Date.now());
     setCategory(next);
   }
   // Change the per-session new-card cap and remember it for next time. The
   // sessionToken dep on `newLimit` rebuilds the queue.
   function changeSessionSize(next: number) {
+    if (gradingRef.current) return;
     if (typeof window !== "undefined") {
       window.localStorage.setItem(
         `vocab:sessionSize:${mode}`,
@@ -192,6 +198,7 @@ export default function Flashcards({
   // run ("increase the session"), or resumes after finishing ("keep going").
   // Oldest-added first, matching buildSession, so old words aren't starved.
   function addMore() {
+    if (gradingRef.current) return;
     const more = byCategory(cards, category)
       .filter((c) => isNew(c) && !queuedIds.has(c.id))
       .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at))
@@ -205,11 +212,18 @@ export default function Flashcards({
   // the background — the server is the source of truth for the next interval.
   async function grade(g: Grade) {
     const cur = remaining[0];
-    if (!cur) return;
+    if (!cur || gradingRef.current) return;
+    gradingRef.current = true;
+    setGrading(true);
     // Reviewing a card before it's due (only reachable while cramming) is a
     // practice rep: the server logs it but leaves the schedule untouched, so
     // cramming can't inflate intervals.
-    const practice = isEarly(cur, now);
+    const practice = isEarly(cur, Date.now());
+    const beforeQueue = remaining;
+    const beforeReviewed = new Set(reviewedIds);
+    const beforeLapsed = new Set(lapsedIds);
+    const beforeFlipped = flipped;
+    const beforeHint = showHint;
     setReviewedIds((s) => (s.has(cur.id) ? s : new Set(s).add(cur.id)));
     if (g === "wrong") {
       setLapsedIds((s) => (s.has(cur.id) ? s : new Set(s).add(cur.id)));
@@ -217,17 +231,15 @@ export default function Flashcards({
     setFlipped(false);
     setShowHint(false);
     setError(null);
-    setRemaining((r) => {
-      const rest = r.slice(1);
-      if (g === "wrong") {
-        // Lapse: bring it back later in this same session so it's drilled until
-        // it sticks (within-session "learning step"), in addition to its
-        // server-side due date.
-        const at = Math.min(RELEARN_GAP, rest.length);
-        rest.splice(at, 0, cur);
-      }
-      return rest;
-    });
+    const rest = remaining.slice(1);
+    if (g === "wrong") {
+      // Lapse: bring it back later in this same session so it's drilled until
+      // it sticks (within-session "learning step"), in addition to its
+      // server-side due date.
+      const at = Math.min(RELEARN_GAP, rest.length);
+      rest.splice(at, 0, cur);
+    }
+    setRemaining(rest);
     try {
       const updated = await reviewVocab(cur.id, g, { practice, mode });
       // Re-project the raw server row for this deck so our working copy keeps
@@ -235,7 +247,15 @@ export default function Flashcards({
       const projected = deckCard(updated, mode);
       setCards((cs) => cs.map((c) => (c.id === projected.id ? projected : c)));
     } catch (e) {
+      setRemaining(beforeQueue);
+      setReviewedIds(beforeReviewed);
+      setLapsedIds(beforeLapsed);
+      setFlipped(beforeFlipped);
+      setShowHint(beforeHint);
       setError((e as Error).message);
+    } finally {
+      gradingRef.current = false;
+      setGrading(false);
     }
   }
 
@@ -254,7 +274,7 @@ export default function Flashcards({
       ) {
         return; // don't hijack the category select, nav, or any text field
       }
-      if (remaining.length === 0) return;
+      if (remaining.length === 0 || gradingRef.current) return;
       if (e.key === "h" || e.key === "H") {
         setShowHint((s) => !s);
         return;
@@ -309,7 +329,11 @@ export default function Flashcards({
     <div className="mx-auto flex max-w-xl flex-col gap-5">
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <Select value={category} onValueChange={changeCategory}>
+          <Select
+            value={category}
+            onValueChange={changeCategory}
+            disabled={grading}
+          >
             <SelectTrigger className="w-40">
               <SelectValue />
             </SelectTrigger>
@@ -329,6 +353,7 @@ export default function Flashcards({
             onValueChange={(v) =>
               changeSessionSize(v === "all" ? Infinity : Number(v))
             }
+            disabled={grading}
           >
             <SelectTrigger className="w-36" aria-label="New cards per session">
               <SelectValue />
@@ -355,9 +380,10 @@ export default function Flashcards({
       </div>
 
       {error && (
-        <div className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-          Couldn’t save that review: {error}
-        </div>
+        <Alert variant="destructive">
+          <AlertTitle>Couldn’t save that review</AlertTitle>
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
       )}
 
       {categoryCount === 0 ? (
@@ -382,6 +408,7 @@ export default function Flashcards({
           moreBatch={moreBatch}
           onRestart={restart}
           onStudyMore={addMore}
+          busy={grading}
         />
       ) : (
         <>
@@ -389,6 +416,7 @@ export default function Flashcards({
           <button
             type="button"
             onClick={() => setFlipped((f) => !f)}
+            disabled={grading}
             aria-label={flipped ? "Show word" : "Flip to answer"}
             className="block w-full focus-visible:outline-none"
           >
@@ -444,10 +472,11 @@ export default function Flashcards({
             <div className="flex flex-col items-center gap-2">
               <Button
                 size="lg"
-                className="w-full max-w-xs gap-2"
+                className="w-full max-w-xs"
                 onClick={() => grade("remember")}
+                disabled={grading}
               >
-                <Check aria-hidden /> I remember
+                <Check data-icon="inline-start" aria-hidden /> I remember
               </Button>
               <p className="text-xs text-muted-foreground">
                 Not sure? Tap the card to reveal the meaning.
@@ -459,13 +488,14 @@ export default function Flashcards({
                 <Button
                   size="lg"
                   variant="outline"
-                  className="gap-2 border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                  className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
                   onClick={() => grade("wrong")}
+                  disabled={grading}
                 >
-                  <X aria-hidden /> Forgot
+                  <X data-icon="inline-start" aria-hidden /> Forgot
                 </Button>
-                <Button size="lg" className="gap-2" onClick={() => grade("right")}>
-                  <Check aria-hidden /> Got it
+                <Button size="lg" onClick={() => grade("right")} disabled={grading}>
+                  <Check data-icon="inline-start" aria-hidden /> Got it
                 </Button>
               </div>
               <p className="text-xs text-muted-foreground">
@@ -500,6 +530,7 @@ export default function Flashcards({
                 size="sm"
                 className="h-auto p-0 text-xs"
                 onClick={addMore}
+                disabled={grading}
               >
                 Add {moreBatch} more · {availableNew} new waiting
               </Button>
@@ -512,6 +543,7 @@ export default function Flashcards({
               variant="ghost"
               size="icon-lg"
               onClick={restart}
+              disabled={grading}
               aria-label="Restart session"
             >
               <RotateCcw aria-hidden />
@@ -520,6 +552,7 @@ export default function Flashcards({
               variant="ghost"
               size="icon-lg"
               onClick={() => setShowHint((s) => !s)}
+              disabled={grading}
               aria-pressed={showHint}
               aria-label={showHint ? "Hide Marathi hint" : "Show Marathi hint"}
               className={showHint ? "text-primary" : undefined}
@@ -552,6 +585,7 @@ function CaughtUp({
   moreBatch,
   onRestart,
   onStudyMore,
+  busy,
 }: {
   reviewed: number;
   revisited: number;
@@ -560,6 +594,7 @@ function CaughtUp({
   moreBatch: number;
   onRestart: () => void;
   onStudyMore: () => void;
+  busy: boolean;
 }) {
   const finished = reviewed > 0;
   const recalled = reviewed - revisited; // cards cleared without a lapse
@@ -592,12 +627,12 @@ function CaughtUp({
         </EmptyDescription>
       </EmptyHeader>
       {availableNew > 0 ? (
-        <Button className="gap-2" onClick={onStudyMore}>
-          <Sparkles aria-hidden /> Study {moreBatch} more
+        <Button onClick={onStudyMore} disabled={busy}>
+          <Sparkles data-icon="inline-start" aria-hidden /> Study {moreBatch} more
         </Button>
       ) : (
-        <Button variant="outline" className="gap-2" onClick={onRestart}>
-          <RotateCcw aria-hidden /> Study again
+        <Button variant="outline" onClick={onRestart} disabled={busy}>
+          <RotateCcw data-icon="inline-start" aria-hidden /> Study again
         </Button>
       )}
     </Empty>

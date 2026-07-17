@@ -47,7 +47,7 @@ export default function AddVocabForm({ onAdded }: { onAdded: () => void }) {
   const [invalid, setInvalid] = useState(false);
   // The kanji the user chose to study, reported by <KanjiBreakdown> (only
   // meaningful while "study as kanji" is on).
-  const [kanjiSelection, setKanjiSelection] = useState<string[]>([]);
+  const [kanjiSelection, setKanjiSelection] = useState<string[] | null>(null);
 
   const set = (k: keyof VocabInput, v: string) =>
     setForm((f) => ({ ...f, [k]: v }));
@@ -58,16 +58,28 @@ export default function AddVocabForm({ onAdded }: { onAdded: () => void }) {
       setInvalid(true);
       return;
     }
+    if (form.study_as_kanji && kanjiSelection === null) {
+      toast.info("Kanji details are still loading");
+      return;
+    }
     setInvalid(false);
     setSaving(true);
     try {
       // When studying as kanji, persist exactly the kanji the user left on.
       const kanji_selection = form.study_as_kanji ? kanjiSelection : null;
-      const { inserted } = await createVocab({ ...form, kanji_selection });
+      const { inserted, syncWarning } = await createVocab({
+        ...form,
+        kanji_selection,
+      });
       if (inserted) {
         setForm({ ...EMPTY, category: form.category });
-        setKanjiSelection([]);
+        setKanjiSelection(null);
         toast.success("Saved", { description: "Added to your vocab list." });
+        if (syncWarning) {
+          toast.warning("Saved, but Kanji sync needs a retry", {
+            description: syncWarning,
+          });
+        }
         onAdded();
       } else {
         // Same word is already saved — keep the form so it can be tweaked.
@@ -99,6 +111,7 @@ export default function AddVocabForm({ onAdded }: { onAdded: () => void }) {
                 value={form.kanji}
                 onChange={(e) => {
                   set("kanji", e.target.value);
+                  if (form.study_as_kanji) setKanjiSelection(null);
                   if (invalid) setInvalid(false);
                 }}
                 placeholder="例: 食べる"
@@ -177,9 +190,13 @@ export default function AddVocabForm({ onAdded }: { onAdded: () => void }) {
               <Switch
                 id="study_as_kanji"
                 checked={form.study_as_kanji ?? false}
-                onCheckedChange={(v) =>
-                  setForm((f) => ({ ...f, study_as_kanji: v }))
-                }
+                onCheckedChange={(studyAsKanji) => {
+                  if (studyAsKanji) setKanjiSelection(null);
+                  setForm((current) => ({
+                    ...current,
+                    study_as_kanji: studyAsKanji,
+                  }));
+                }}
               />
             </Field>
 
@@ -193,10 +210,17 @@ export default function AddVocabForm({ onAdded }: { onAdded: () => void }) {
             <Button
               type="submit"
               size="lg"
-              disabled={saving}
+              disabled={
+                saving ||
+                (form.study_as_kanji === true && kanjiSelection === null)
+              }
               className="w-full sm:w-auto"
             >
-              {saving ? "Saving…" : "Add to vocab list"}
+              {saving
+                ? "Saving…"
+                : form.study_as_kanji && kanjiSelection === null
+                  ? "Loading kanji…"
+                  : "Add to vocab list"}
             </Button>
           </FieldGroup>
         </form>

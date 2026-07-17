@@ -50,8 +50,12 @@ two coverage-critical steps (see [`lib/kanji-sync.ts`](../lib/kanji-sync.ts)):
 1. **Extract every kanji of the word** — `kanjiChars()` in
    [`lib/kanji-deck.ts`](../lib/kanji-deck.ts) returns each unique CJK character
    (kana/latin contribute nothing). No kanji of a word is skipped at this step.
-2. **One card per kanji that has a JLPT level**, tagged with that level. Kanji
-   with no JLPT level are intentionally left out (the deck is organized by level).
+2. **Choose the desired characters.** An uncurated word defaults to every kanji
+   that has a JLPT level. A curated array uses exactly the user's unique selected
+   characters, including an explicitly selected ungraded kanji.
+3. **Reconcile without losing history.** Desired cards are activated/updated;
+   deselected cards remain stored but inactive so reselecting restores their SRS
+   schedule.
 
 At study time the deck is filtered by an **active JLPT level**, which is
 **cumulative** (`matchesLevel()`):
@@ -75,8 +79,8 @@ Active level N4  → shows 食 (N5) AND 事 (N4)     (cumulative).
 Active level All → shows everything.
 ```
 
-Every kanji that has a JLPT level is reachable — at its own level, at any harder
-selection (cumulative), or at **All**. Nothing with a level is stranded.
+Every active graded kanji is reachable at its own level, any harder cumulative
+selection, or **All**. Active ungraded selections are reachable through **All**.
 
 ---
 
@@ -103,6 +107,8 @@ passes iff:
 | AC7 | Selecting a level is **cumulative**: N4 includes N5 + N4; harder levels are excluded. |
 | AC8 | **Every leveled kanji is reachable** — by All, by N1 (cumulative = all), and by its own level. Nothing stranded. |
 | AC9 | **Every kanji of a word is extracted** (de-duplicated, first-seen order); kana/latin add nothing. |
+| AC13 | Refreshing server card data preserves the live queue order and relearning duplicates. |
+| AC14 | Cards that become inactive are removed from the queue without restarting it. |
 
 Run them with:
 
@@ -111,8 +117,7 @@ node --test lib/coverage.test.ts   # just these
 node --test                        # the whole suite
 ```
 
-> Note: this covers the *selection* algorithm (which cards are shown, and that
-> none are dropped). The end-to-end population of the smart deck also depends on
-> the kanjiapi.dev JLPT lookup and kuroshiro furigana, which need the running app
-> / network and are checked by the manual verification steps in
-> [`spaced-repetition.md`](./spaced-repetition.md), not by these unit tests.
+`lib/kanji-selection.test.ts` additionally checks strict API selection rules;
+`lib/kanji-sync.test.ts` checks creation, metadata updates, activation, and
+deactivation planning. Live kanjiapi.dev and kuroshiro integration still requires
+the running application/network.

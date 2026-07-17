@@ -65,11 +65,12 @@ Then enable auth scoping + migrate your existing words: open **SQL Editor**, set
 the top of [`supabase/0002_auth_rls.sql`](./supabase/0002_auth_rls.sql), and run it. (It adds
 `user_id`, backfills your existing rows to your account, and turns on RLS + per-user policies.)
 
-### 5. Enable spaced-repetition scheduling
-Open **SQL Editor**, paste [`supabase/0003_srs.sql`](./supabase/0003_srs.sql), and run it (it's
-idempotent). It adds the SM-2 scheduling columns to `vocab` plus an append-only `reviews` log.
-Existing words are treated as new and enter the flashcard rotation immediately. How the scheduler
-works: [`docs/spaced-repetition.md`](./docs/spaced-repetition.md).
+### 5. Enable study decks and scheduling
+In **SQL Editor**, run the remaining migrations in numeric order:
+`0003_srs.sql` through `0008_atomic_reviews.sql`. They add the independent word/Kanji schedules,
+per-character Smart Kanji cards, curated selections, lossless reconciliation, and atomic review
+history. Existing words enter the flashcard rotation as new cards. How the scheduler works:
+[`docs/spaced-repetition.md`](./docs/spaced-repetition.md).
 
 ## Import file format
 The first row may be a header. Recognized column names (case-insensitive, any order):

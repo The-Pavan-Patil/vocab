@@ -17,6 +17,7 @@ import {
   groupByKanji,
   kanjiChars,
   matchesLevel,
+  refreshQueuedKanjiCards,
 } from "./kanji-deck.ts";
 
 const DAY = 86_400_000;
@@ -200,4 +201,36 @@ test("AC12: groupByKanji handles empty and all-distinct inputs", () => {
   assert.deepEqual(groupByKanji([]), []);
   const distinct = [kc("日", "日"), kc("本", "本"), kc("語", "語")];
   assert.deepEqual(groupByKanji(distinct), distinct); // nothing to cluster → unchanged
+});
+
+// AC13 — refreshing server-backed card data must not restart a live session.
+test("AC13: queue refresh preserves order, progress, and relearning duplicates", () => {
+  const queue = [
+    { id: "b", value: "old-b" },
+    { id: "a", value: "old-a" },
+    { id: "b", value: "old-b" }, // requeued after a lapse
+  ];
+  const refreshed = refreshQueuedKanjiCards(queue, [
+    { id: "a", value: "new-a" },
+    { id: "b", value: "new-b" },
+    { id: "c", value: "new-c" }, // new deck member: not injected mid-session
+  ]);
+  assert.deepEqual(refreshed, [
+    { id: "b", value: "new-b" },
+    { id: "a", value: "new-a" },
+    { id: "b", value: "new-b" },
+  ]);
+});
+
+test("AC14: queue refresh removes cards that are no longer active", () => {
+  assert.deepEqual(
+    refreshQueuedKanjiCards(
+      [
+        { id: "active" },
+        { id: "inactive" },
+      ],
+      [{ id: "active" }]
+    ),
+    [{ id: "active" }]
+  );
 });

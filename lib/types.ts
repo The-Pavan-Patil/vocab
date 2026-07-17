@@ -137,7 +137,8 @@ export type KanjiCard = {
   reading: string | null; // the kanji's reading in this word, e.g. た
   word_reading: string | null; // full word reading, e.g. たべる
   word_meaning: string | null;
-  vocab_id: string | null;
+  vocab_id: string;
+  active: boolean;
   created_at: string;
   // SRS state (base-named columns; scheduled by lib/srs.ts directly).
   ease: number;

@@ -9,6 +9,7 @@ import {
   CATEGORIES,
   type DictDetails,
   type DictEntry,
+  type Vocab,
   type VocabInput,
 } from "@/lib/types";
 import KanjiBreakdown from "@/components/KanjiBreakdown";
@@ -63,7 +64,15 @@ function jlptLabel(jlpt: string[]): string | null {
   return levels.length ? levels.sort().reverse()[0] : null;
 }
 
-export default function DictionarySearch({ onAdded }: { onAdded: () => void }) {
+export default function DictionarySearch({
+  vocab,
+  onAdded,
+  onRevealInList,
+}: {
+  vocab: Vocab[];
+  onAdded: () => void;
+  onRevealInList: (word: string) => void;
+}) {
   const [query, setQuery] = useState("");
   const [searched, setSearched] = useState(false);
   const [entries, setEntries] = useState<DictEntry[]>([]);
@@ -78,7 +87,10 @@ export default function DictionarySearch({ onAdded }: { onAdded: () => void }) {
   const [draft, setDraft] = useState<VocabInput | null>(null);
   const [saving, setSaving] = useState(false);
   // Kanji chosen in the dialog's breakdown (only when "study as kanji" is on).
-  const [draftSelection, setDraftSelection] = useState<string[]>([]);
+  const [draftSelection, setDraftSelection] = useState<string[] | null>(null);
+  const [draftInitialSelection, setDraftInitialSelection] = useState<
+    string[] | null
+  >(null);
 
   // Close the Add dialog when this tab is hidden by <Activity>. The dialog
   // renders into a portal on document.body — outside the Activity boundary — so
@@ -127,17 +139,64 @@ export default function DictionarySearch({ onAdded }: { onAdded: () => void }) {
   const setField = (k: keyof VocabInput, v: string) =>
     setDraft((d) => (d ? { ...d, [k]: v } : d));
 
+  function openDraft(entry: DictEntry) {
+    const dictionaryDraft = entryToVocabInput(entry);
+    const existing = vocab.find(
+      (word) => word.kanji.trim() === dictionaryDraft.kanji.trim()
+    );
+    const savedSelection = existing?.kanji_selection ?? null;
+
+    setDraft(
+      existing
+        ? {
+            ...dictionaryDraft,
+            kanji: existing.kanji,
+            romaji: existing.romaji ?? dictionaryDraft.romaji,
+            english: existing.english ?? dictionaryDraft.english,
+            tips: existing.tips ?? dictionaryDraft.tips,
+            category: existing.category ?? dictionaryDraft.category,
+            study_as_kanji: existing.study_as_kanji ?? false,
+            kanji_selection: savedSelection,
+          }
+        : dictionaryDraft
+    );
+    setDraftSelection(savedSelection);
+    setDraftInitialSelection(savedSelection);
+  }
+
   async function saveDraft() {
     if (!draft) return;
+    if (draft.study_as_kanji && draftSelection === null) {
+      toast.info("Kanji details are still loading");
+      return;
+    }
     setSaving(true);
     try {
-      // Persist the curated kanji set only when studying this word as kanji.
-      const kanji_selection = draft.study_as_kanji ? draftSelection : null;
-      const { inserted } = await createVocab({ ...draft, kanji_selection });
+      // Keep a saved selection while the broad toggle is off so turning the word
+      // back on restores the same character cards and schedules.
+      const kanji_selection = draftSelection;
+      const word = draft.kanji.trim();
+      const { inserted, updated, syncWarning } = await createVocab(
+        { ...draft, kanji_selection },
+        { updateExisting: true }
+      );
       if (inserted) {
-        toast.success("Added to vocab list", { description: draft.kanji });
+        toast.success("Added to vocab list", { description: word });
       } else {
-        toast.info("Already in your list", { description: draft.kanji });
+        toast.info("Already in your list", {
+          description: updated
+            ? `${word} was updated with your latest changes.`
+            : word,
+          action: {
+            label: "View in list",
+            onClick: () => onRevealInList(word),
+          },
+        });
+      }
+      if (syncWarning) {
+        toast.warning("Word saved, but Kanji sync needs a retry", {
+          description: syncWarning,
+        });
       }
       setDraft(null);
       onAdded();
@@ -221,10 +280,7 @@ export default function DictionarySearch({ onAdded }: { onAdded: () => void }) {
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={() => {
-                        setDraft(entryToVocabInput(entry));
-                        setDraftSelection([]);
-                      }}
+                      onClick={() => openDraft(entry)}
                       aria-label={`Add ${entry.word} to vocab`}
                     >
                       <Plus aria-hidden />
@@ -370,7 +426,11 @@ export default function DictionarySearch({ onAdded }: { onAdded: () => void }) {
                     id="d-kanji"
                     className="jp text-lg"
                     value={draft.kanji}
-                    onChange={(e) => setField("kanji", e.target.value)}
+                    onChange={(e) => {
+                      setDraftSelection(null);
+                      setDraftInitialSelection(null);
+                      setField("kanji", e.target.value);
+                    }}
                   />
                 </Field>
                 <Field>
@@ -430,14 +490,22 @@ export default function DictionarySearch({ onAdded }: { onAdded: () => void }) {
                   <Switch
                     id="d-study-kanji"
                     checked={draft.study_as_kanji ?? false}
-                    onCheckedChange={(v) =>
-                      setDraft((d) => (d ? { ...d, study_as_kanji: v } : d))
-                    }
+                    onCheckedChange={(studyAsKanji) => {
+                      if (studyAsKanji) {
+                        setDraftInitialSelection(draftSelection);
+                      }
+                      setDraft((current) =>
+                        current
+                          ? { ...current, study_as_kanji: studyAsKanji }
+                          : current
+                      );
+                    }}
                   />
                 </Field>
                 {draft.study_as_kanji && (
                   <KanjiBreakdown
                     word={draft.kanji}
+                    initialSelection={draftInitialSelection}
                     onChange={setDraftSelection}
                   />
                 )}
@@ -448,8 +516,18 @@ export default function DictionarySearch({ onAdded }: { onAdded: () => void }) {
             <Button variant="ghost" onClick={() => setDraft(null)}>
               Cancel
             </Button>
-            <Button onClick={saveDraft} disabled={saving}>
-              {saving ? "Saving…" : "Save to list"}
+            <Button
+              onClick={saveDraft}
+              disabled={
+                saving ||
+                (draft?.study_as_kanji === true && draftSelection === null)
+              }
+            >
+              {saving
+                ? "Saving…"
+                : draft?.study_as_kanji && draftSelection === null
+                  ? "Loading kanji…"
+                  : "Save to list"}
             </Button>
           </DialogFooter>
         </DialogContent>

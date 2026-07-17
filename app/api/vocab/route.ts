@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/supabase/require-user";
-import type { VocabInput } from "@/lib/types";
+import type { Vocab, VocabInput } from "@/lib/types";
+import { validateKanjiSelection } from "@/lib/kanji-selection";
+import { syncKanjiCards } from "@/lib/kanji-sync";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,16 +22,14 @@ export async function GET() {
   return NextResponse.json({ data });
 }
 
-function sanitize(v: Partial<VocabInput>): VocabInput | null {
+function sanitize(
+  v: Partial<VocabInput>
+): { row: VocabInput | null; error?: string } {
   const kanji = (v.kanji ?? "").toString().trim();
-  if (!kanji) return null;
+  if (!kanji) return { row: null };
   const studyAsKanji = v.study_as_kanji === true;
-  // The curated kanji set only means something when the word is studied as kanji;
-  // keep just the string entries, else null (= sync's all-graded default).
-  const selection =
-    studyAsKanji && Array.isArray(v.kanji_selection)
-      ? v.kanji_selection.filter((c): c is string => typeof c === "string")
-      : null;
+  const selection = validateKanjiSelection(kanji, v.kanji_selection);
+  if (!selection.ok) return { row: null, error: selection.error };
   const row: VocabInput = {
     kanji,
     romaji: v.romaji?.toString().trim() || null,
@@ -38,11 +38,10 @@ function sanitize(v: Partial<VocabInput>): VocabInput | null {
     category: v.category?.toString().trim() || null,
     study_as_kanji: studyAsKanji, // also drill as a kanji-only card
   };
-  // Only attach the curated set when the user actually chose one, so uncurated
-  // adds never reference the kanji_selection column — they keep working even
-  // before migration 0006 has been applied.
-  if (selection) row.kanji_selection = selection;
-  return row;
+  // Preserve an explicit set even while the broad toggle is off. Reconciliation
+  // marks its cards inactive; re-enabling restores the same cards and schedules.
+  if ("kanji_selection" in v) row.kanji_selection = selection.selection;
+  return { row };
 }
 
 // POST /api/vocab — create one ({...}) or many ({ rows: [...] }) records for the
@@ -58,13 +57,20 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
+  const updateExisting =
+    (body as { update_existing?: unknown })?.update_existing === true;
   const incoming = Array.isArray((body as { rows?: unknown[] })?.rows)
     ? ((body as { rows: Partial<VocabInput>[] }).rows)
     : [body as Partial<VocabInput>];
 
-  const sanitized = incoming
-    .map(sanitize)
-    .filter((r): r is VocabInput => r !== null);
+  const sanitized: VocabInput[] = [];
+  for (const source of incoming) {
+    const result = sanitize(source);
+    if (result.error) {
+      return NextResponse.json({ error: result.error }, { status: 400 });
+    }
+    if (result.row) sanitized.push(result.row);
+  }
 
   if (sanitized.length === 0) {
     return NextResponse.json(
@@ -78,37 +84,97 @@ export async function POST(request: Request) {
   // Without this, re-adding the same dictionary word just stacks duplicates.
   const { data: existing, error: existingError } = await auth.supabase
     .from("vocab")
-    .select("kanji");
+    .select("id, kanji");
   if (existingError) {
     return NextResponse.json({ error: existingError.message }, { status: 500 });
   }
 
   // Stamp each kept row with the owner so it satisfies the RLS insert policy
   // (user_id must equal auth.uid()).
-  const seen = new Set((existing ?? []).map((r) => r.kanji as string));
+  const existingByKanji = new Map(
+    (existing ?? []).map((r) => [r.kanji as string, r.id as string])
+  );
+  const seen = new Set(existingByKanji.keys());
   const rows: (VocabInput & { user_id: string })[] = [];
+  const updates: { id: string; row: VocabInput }[] = [];
+  const queuedUpdates = new Set<string>();
   let skipped = 0;
-  for (const r of sanitized) {
-    if (seen.has(r.kanji)) {
+  for (const row of sanitized) {
+    const existingId = existingByKanji.get(row.kanji);
+    if (existingId) {
+      if (updateExisting && !queuedUpdates.has(existingId)) {
+        queuedUpdates.add(existingId);
+        updates.push({ id: existingId, row });
+      } else {
+        skipped++;
+      }
+      continue;
+    }
+    if (seen.has(row.kanji)) {
       skipped++;
       continue;
     }
-    seen.add(r.kanji);
-    rows.push({ ...r, user_id: auth.user.id });
+    seen.add(row.kanji);
+    rows.push({ ...row, user_id: auth.user.id });
   }
 
-  // Everything incoming was already in the list — nothing to insert, but that's
-  // a no-op, not an error.
+  const updatedRows: Vocab[] = [];
+  for (const update of updates) {
+    const { data, error } = await auth.supabase
+      .from("vocab")
+      .update(update.row)
+      .eq("id", update.id)
+      .select()
+      .maybeSingle();
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+    if (data) updatedRows.push(data as Vocab);
+  }
+
+  // Everything incoming was already in the list — nothing to insert, but an
+  // optional update may still have been applied.
   if (rows.length === 0) {
-    return NextResponse.json({ data: [], inserted: 0, skipped }, { status: 200 });
+    let syncWarning: string | null = null;
+    try {
+      await syncKanjiCards(auth.supabase, auth.user.id, updatedRows);
+    } catch (error) {
+      syncWarning = (error as Error).message;
+    }
+    return NextResponse.json(
+      {
+        data: updatedRows,
+        inserted: 0,
+        updated: updatedRows.length,
+        skipped,
+        sync_warning: syncWarning,
+      },
+      { status: 200 }
+    );
   }
 
   const { data, error } = await auth.supabase.from("vocab").insert(rows).select();
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
+  const insertedRows = (data ?? []) as Vocab[];
+  let syncWarning: string | null = null;
+  try {
+    await syncKanjiCards(auth.supabase, auth.user.id, [
+      ...updatedRows,
+      ...insertedRows,
+    ]);
+  } catch (syncError) {
+    syncWarning = (syncError as Error).message;
+  }
   return NextResponse.json(
-    { data, inserted: data?.length ?? 0, skipped },
+    {
+      data: [...updatedRows, ...insertedRows],
+      inserted: insertedRows.length,
+      updated: updatedRows.length,
+      skipped,
+      sync_warning: syncWarning,
+    },
     { status: 201 }
   );
 }

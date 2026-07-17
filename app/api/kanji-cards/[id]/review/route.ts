@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/supabase/require-user";
 import { isEarly, schedule, KANJI_TUNING, type Grade } from "@/lib/srs";
-import { readSrs, writeSrs } from "@/lib/decks";
+import { readSrs } from "@/lib/decks";
 
 export const runtime = "nodejs";
 
@@ -38,6 +38,7 @@ export async function POST(request: Request, { params }: Params) {
     .from("kanji_cards")
     .select("*")
     .eq("id", id)
+    .eq("active", true)
     .maybeSingle();
   if (readErr) {
     return NextResponse.json({ error: readErr.message }, { status: 500 });
@@ -48,52 +49,53 @@ export async function POST(request: Request, { params }: Params) {
 
   const reviewedAt = Date.now();
   const prev = readSrs(card, "word"); // kanji_cards use the base SRS column names
+  const applySchedule = !(practice && isEarly(prev, reviewedAt));
+  const scheduled = applySchedule
+    ? schedule(prev, grade, reviewedAt, KANJI_TUNING)
+    : {
+        next: prev,
+        log: {
+          interval_before: prev.interval_days,
+          interval_after: prev.interval_days,
+          ease_after: prev.ease,
+          elapsed_days: prev.last_reviewed_at
+            ? (reviewedAt - Date.parse(prev.last_reviewed_at)) / 86_400_000
+            : null,
+        },
+      };
+  const { next, log } = scheduled;
 
-  // Practice (cram) review of a not-yet-due card: log it, leave the schedule.
-  if (practice && isEarly(prev, reviewedAt)) {
-    const elapsed_days = prev.last_reviewed_at
-      ? (reviewedAt - Date.parse(prev.last_reviewed_at)) / 86_400_000
-      : null;
-    const { error: logErr } = await auth.supabase.from("reviews").insert({
-      kanji_card_id: id,
-      user_id: auth.user.id,
-      grade,
-      mode: "kanji_char",
-      interval_before: prev.interval_days,
-      interval_after: prev.interval_days,
-      ease_after: prev.ease,
-      elapsed_days,
-    });
-    if (logErr) console.error("reviews insert failed:", logErr.message);
-    return NextResponse.json({ data: card });
-  }
-
-  const { next, log } = schedule(prev, grade, reviewedAt, KANJI_TUNING);
-
-  const { data: updated, error: updErr } = await auth.supabase
-    .from("kanji_cards")
-    .update(writeSrs(next, "word"))
-    .eq("id", id)
-    .select()
+  // The RPC locks the card and commits the schedule + review log atomically.
+  const { data: updated, error: commitError } = await auth.supabase
+    .rpc("commit_kanji_card_review", {
+      p_card_id: id,
+      p_expected_last_reviewed_at: prev.last_reviewed_at,
+      p_apply_schedule: applySchedule,
+      p_ease: next.ease,
+      p_interval_days: next.interval_days,
+      p_reps: next.reps,
+      p_lapses: next.lapses,
+      p_state: next.state,
+      p_due_at: next.due_at,
+      p_last_reviewed_at: next.last_reviewed_at,
+      p_grade: grade,
+      p_interval_before: log.interval_before,
+      p_interval_after: log.interval_after,
+      p_ease_after: log.ease_after,
+      p_elapsed_days: log.elapsed_days,
+      p_reviewed_at: new Date(reviewedAt).toISOString(),
+    })
     .maybeSingle();
-  if (updErr) {
-    return NextResponse.json({ error: updErr.message }, { status: 500 });
+  if (commitError) {
+    const conflict = commitError.code === "40001";
+    return NextResponse.json(
+      { error: commitError.message },
+      { status: conflict ? 409 : 500 }
+    );
   }
   if (!updated) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
-
-  const { error: logErr } = await auth.supabase.from("reviews").insert({
-    kanji_card_id: id,
-    user_id: auth.user.id,
-    grade,
-    mode: "kanji_char",
-    interval_before: log.interval_before,
-    interval_after: log.interval_after,
-    ease_after: log.ease_after,
-    elapsed_days: log.elapsed_days,
-  });
-  if (logErr) console.error("reviews insert failed:", logErr.message);
 
   return NextResponse.json({ data: updated });
 }
