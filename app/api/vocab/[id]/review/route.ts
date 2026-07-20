@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
-import { requireUser } from "@/lib/supabase/require-user";
+import { requireReviewSession } from "@/lib/supabase/require-user";
 import { isEarly, schedule, KANJI_TUNING, WORD_TUNING, type Grade } from "@/lib/srs";
 import { readSrs, type StudyMode } from "@/lib/decks";
+import { isReviewId } from "@/lib/review-command";
 
 export const runtime = "nodejs";
 
@@ -10,18 +11,24 @@ type Params = { params: Promise<{ id: string }> };
 const GRADES: Grade[] = ["remember", "right", "wrong"];
 
 // POST /api/vocab/[id]/review — record a flashcard review.
-// Body: { grade: "remember" | "right" | "wrong", practice?: boolean, mode?: "word" | "kanji" }
+// Body: { reviewId, grade: "remember" | "right" | "wrong",
+//         practice?: boolean, mode?: "word" | "kanji" }
 // Loads the card's current SRS state for the chosen deck (the server is the
 // single source of truth for intervals), computes + persists the next schedule
 // to that deck's columns, and appends a row to the reviews log. Returns the
 // updated card. `mode` selects the word track or the independent kanji track.
 export async function POST(request: Request, { params }: Params) {
-  const auth = await requireUser();
+  const auth = await requireReviewSession();
   if ("response" in auth) return auth.response;
 
   const { id } = await params;
 
-  let body: { grade?: unknown; practice?: unknown; mode?: unknown };
+  let body: {
+    grade?: unknown;
+    practice?: unknown;
+    mode?: unknown;
+    reviewId?: unknown;
+  };
   try {
     body = await request.json();
   } catch {
@@ -35,6 +42,13 @@ export async function POST(request: Request, { params }: Params) {
       { status: 400 }
     );
   }
+  if (!isReviewId(body.reviewId)) {
+    return NextResponse.json(
+      { error: "reviewId must be a valid UUID" },
+      { status: 400 }
+    );
+  }
+  const reviewId = body.reviewId;
   // A cram ("Study again") review of a not-yet-due card. We honor it only when
   // the card really isn't due yet (checked below against the server clock).
   const practice = body.practice === true;
@@ -99,6 +113,7 @@ export async function POST(request: Request, { params }: Params) {
       p_ease_after: log.ease_after,
       p_elapsed_days: log.elapsed_days,
       p_reviewed_at: new Date(reviewedAt).toISOString(),
+      p_client_review_id: reviewId,
     })
     .maybeSingle();
   if (commitError) {

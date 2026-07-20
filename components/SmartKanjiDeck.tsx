@@ -1,6 +1,12 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { Check, Clock, Languages, Loader2, RotateCcw, Sparkles, X } from "lucide-react";
 import type { KanjiCard, KanjiInfo } from "@/lib/types";
 import {
@@ -20,9 +26,18 @@ import {
   refreshQueuedKanjiCards,
 } from "@/lib/kanji-deck";
 import { fetchKanji, fetchKanjiCards, reviewKanjiCard, syncKanjiCards } from "@/lib/api";
+import { createReviewId } from "@/lib/review-command";
+import { useReviewOutbox } from "@/hooks/use-review-outbox";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Spinner } from "@/components/ui/spinner";
+import {
+  Alert,
+  AlertAction,
+  AlertDescription,
+  AlertTitle,
+} from "@/components/ui/alert";
 import {
   Empty,
   EmptyDescription,
@@ -72,6 +87,13 @@ function buildKanjiQueue(
   );
 }
 
+type KanjiReviewCommand = {
+  reviewId: string;
+  cardId: string;
+  grade: "remember" | "right" | "wrong";
+  practice: boolean;
+};
+
 // The word with the target kanji emphasized — "what reading does THIS take here?"
 function WordWithFocus({ word, char }: { word: string; char: string }) {
   return (
@@ -109,13 +131,12 @@ export default function SmartKanjiDeck({
   const [flipped, setFlipped] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<Record<string, KanjiInfo>>({});
-  const [grading, setGrading] = useState(false);
 
   // Refs let async refreshes reconcile the latest cache/queue without making
   // either one a dependency that implicitly restarts the current session.
   const initializedRef = useRef(false);
   const syncedRef = useRef(false);
-  const gradingRef = useRef(false);
+  const interactionHandledRef = useRef(false);
   const cardsRef = useRef<KanjiCard[]>([]);
   const remainingRef = useRef<KanjiCard[]>([]);
 
@@ -123,6 +144,37 @@ export default function SmartKanjiDeck({
     remainingRef.current = next;
     setRemaining(next);
   }
+
+  const sendReview = useCallback(
+    (command: KanjiReviewCommand) =>
+      reviewKanjiCard(command.cardId, command.grade, {
+        reviewId: command.reviewId,
+        practice: command.practice,
+      }),
+    []
+  );
+  const applySavedReview = useCallback((updated: KanjiCard) => {
+    const nextCards = cardsRef.current.map((item) =>
+      item.id === updated.id ? updated : item
+    );
+    cardsRef.current = nextCards;
+    setAllCards(nextCards);
+    const nextQueue = remainingRef.current.map((item) =>
+      item.id === updated.id ? updated : item
+    );
+    remainingRef.current = nextQueue;
+    setRemaining(nextQueue);
+  }, []);
+  const reviewOutbox = useReviewOutbox<KanjiReviewCommand, KanjiCard>({
+    send: sendReview,
+    onSuccess: applySavedReview,
+  });
+  const sessionLocked = reviewOutbox.pendingCount > 0;
+  const reviewBlocked = reviewOutbox.blocked;
+
+  useLayoutEffect(() => {
+    interactionHandledRef.current = false;
+  });
 
   function startSession(
     source: KanjiCard[],
@@ -235,13 +287,13 @@ export default function SmartKanjiDeck({
   }, [currentChar, info]);
 
   function changeLevel(next: number) {
-    if (gradingRef.current) return;
+    if (sessionLocked) return;
     if (typeof window !== "undefined") window.localStorage.setItem("kanji:level", String(next));
     setLevel(next);
     startSession(cardsRef.current, { level: next, cram: false });
   }
   function changeSize(next: number) {
-    if (gradingRef.current) return;
+    if (sessionLocked) return;
     if (typeof window !== "undefined") {
       window.localStorage.setItem("kanji:sessionSize", Number.isFinite(next) ? String(next) : "all");
     }
@@ -249,49 +301,32 @@ export default function SmartKanjiDeck({
     startSession(cardsRef.current, { newLimit: next, cram: false });
   }
   function restart() {
-    if (gradingRef.current) return;
+    if (sessionLocked) return;
     startSession(cardsRef.current, { cram: true });
   }
 
-  async function grade(g: "remember" | "right" | "wrong") {
+  function grade(g: "remember" | "right" | "wrong") {
     const cur = remaining[0];
-    if (!cur || gradingRef.current) return;
-    gradingRef.current = true;
-    setGrading(true);
+    if (!cur || reviewBlocked || interactionHandledRef.current) return;
+    interactionHandledRef.current = true;
     const practice = isEarly(cur, Date.now());
-    const beforeQueue = remaining;
-    const beforeReviewed = new Set(reviewedIds);
-    const beforeLapsed = new Set(lapsedIds);
-    const beforeFlipped = flipped;
+    const accepted = reviewOutbox.enqueue({
+      reviewId: createReviewId(),
+      cardId: cur.id,
+      grade: g,
+      practice,
+    });
+    if (!accepted) {
+      interactionHandledRef.current = false;
+      return;
+    }
+
     setReviewedIds((s) => (s.has(cur.id) ? s : new Set(s).add(cur.id)));
     if (g === "wrong") setLapsedIds((s) => (s.has(cur.id) ? s : new Set(s).add(cur.id)));
     setFlipped(false);
-    setError(null);
     const rest = remaining.slice(1);
     if (g === "wrong") rest.splice(Math.min(RELEARN_GAP, rest.length), 0, cur);
     setQueue(rest);
-    try {
-      const updated = await reviewKanjiCard(cur.id, g, { practice });
-      const nextCards = cardsRef.current.map((card) =>
-        card.id === updated.id ? updated : card
-      );
-      cardsRef.current = nextCards;
-      setAllCards(nextCards);
-      setQueue(
-        remainingRef.current.map((card) =>
-          card.id === updated.id ? updated : card
-        )
-      );
-    } catch (e) {
-      setQueue(beforeQueue);
-      setReviewedIds(beforeReviewed);
-      setLapsedIds(beforeLapsed);
-      setFlipped(beforeFlipped);
-      setError((e as Error).message);
-    } finally {
-      gradingRef.current = false;
-      setGrading(false);
-    }
   }
 
   useEffect(() => {
@@ -305,7 +340,12 @@ export default function SmartKanjiDeck({
       ) {
         return;
       }
-      if (remaining.length === 0 || gradingRef.current) return;
+      if (
+        remaining.length === 0 ||
+        reviewBlocked ||
+        interactionHandledRef.current
+      )
+        return;
       if (!flipped) {
         if (e.key === " " || e.key === "Enter") {
           e.preventDefault();
@@ -330,7 +370,7 @@ export default function SmartKanjiDeck({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [flipped, remaining]);
+  }, [flipped, remaining, reviewBlocked]);
 
   if (loading) {
     return (
@@ -370,17 +410,17 @@ export default function SmartKanjiDeck({
 
   return (
     <div className="mx-auto flex max-w-xl flex-col gap-5">
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         {isAll ? (
           <span className="text-sm text-muted-foreground">
             All kanji · newest first
           </span>
         ) : (
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Select
               value={String(level)}
               onValueChange={(v) => changeLevel(Number(v))}
-              disabled={grading}
+              disabled={sessionLocked}
             >
               <SelectTrigger className="w-32" aria-label="JLPT level">
                 <SelectValue />
@@ -399,7 +439,7 @@ export default function SmartKanjiDeck({
             <Select
               value={Number.isFinite(newLimit) ? String(newLimit) : "all"}
               onValueChange={(v) => changeSize(v === "all" ? Infinity : Number(v))}
-              disabled={grading}
+              disabled={sessionLocked}
             >
               <SelectTrigger className="w-36" aria-label="New cards per session">
                 <SelectValue />
@@ -416,15 +456,36 @@ export default function SmartKanjiDeck({
             </Select>
           </div>
         )}
-        {reviewedCount > 0 && (
-          <span className="text-sm text-muted-foreground">{reviewedCount} reviewed</span>
-        )}
+        <div className="flex items-center gap-2">
+          {reviewOutbox.pendingCount > 0 && !reviewOutbox.error && (
+            <Badge variant="outline">
+              <Spinner data-icon="inline-start" /> Saving {reviewOutbox.pendingCount}
+            </Badge>
+          )}
+          {reviewedCount > 0 && (
+            <span className="text-sm text-muted-foreground">
+              {reviewedCount} reviewed
+            </span>
+          )}
+        </div>
       </div>
 
       {error && (
         <Alert variant="destructive">
           <AlertTitle>Smart Kanji needs attention</AlertTitle>
           <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+
+      {reviewOutbox.error && (
+        <Alert variant="destructive">
+          <AlertTitle>Couldn’t save that review</AlertTitle>
+          <AlertDescription>{reviewOutbox.error}</AlertDescription>
+          <AlertAction>
+            <Button size="sm" variant="outline" onClick={reviewOutbox.retry}>
+              Retry
+            </Button>
+          </AlertAction>
         </Alert>
       )}
 
@@ -459,7 +520,7 @@ export default function SmartKanjiDeck({
                   })()}
             </EmptyDescription>
           </EmptyHeader>
-          <Button variant="outline" onClick={restart} disabled={grading}>
+          <Button variant="outline" onClick={restart} disabled={sessionLocked}>
             <RotateCcw data-icon="inline-start" aria-hidden /> Study again
           </Button>
         </Empty>
@@ -468,7 +529,7 @@ export default function SmartKanjiDeck({
           <button
             type="button"
             onClick={() => setFlipped((f) => !f)}
-            disabled={grading}
+            disabled={reviewBlocked}
             aria-label={flipped ? "Show word" : "Flip to reading"}
             className="block w-full focus-visible:outline-none"
           >
@@ -511,7 +572,7 @@ export default function SmartKanjiDeck({
 
           {!flipped ? (
             <div className="flex flex-col items-center gap-2">
-              <Button size="lg" className="w-full max-w-xs" onClick={() => grade("remember")} disabled={grading}>
+              <Button size="lg" className="w-full max-w-xs" onClick={() => grade("remember")} disabled={reviewBlocked}>
                 <Check data-icon="inline-start" aria-hidden /> I remember
               </Button>
               <p className="text-xs text-muted-foreground">Not sure? Tap the card to reveal the reading.</p>
@@ -524,11 +585,11 @@ export default function SmartKanjiDeck({
                   variant="outline"
                   className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
                   onClick={() => grade("wrong")}
-                  disabled={grading}
+                  disabled={reviewBlocked}
                 >
                   <X data-icon="inline-start" aria-hidden /> Forgot
                 </Button>
-                <Button size="lg" onClick={() => grade("right")} disabled={grading}>
+                <Button size="lg" onClick={() => grade("right")} disabled={reviewBlocked}>
                   <Check data-icon="inline-start" aria-hidden /> Got it
                 </Button>
               </div>

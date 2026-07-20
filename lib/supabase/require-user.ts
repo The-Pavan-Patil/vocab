@@ -44,3 +44,37 @@ export async function requireUser() {
     response: NextResponse.json({ error: "Not signed in" }, { status: 401 }),
   } as const;
 }
+
+// Faster gate for review hot paths. Reviews only need an authenticated,
+// RLS-scoped client (their RPCs use auth.uid()), not the full auth.users record.
+// getClaims verifies the JWT locally when the project uses asymmetric signing
+// keys and safely falls back to the Auth server for legacy symmetric tokens.
+export async function requireReviewSession() {
+  const cookieClient = await createClient();
+  const { data: cookieClaims } = await cookieClient.auth.getClaims();
+  if (cookieClaims?.claims.sub) {
+    return { supabase: cookieClient, subject: cookieClaims.claims.sub } as const;
+  }
+
+  const authz = (await headers()).get("authorization") ?? "";
+  const token = authz.toLowerCase().startsWith("bearer ")
+    ? authz.slice(7).trim()
+    : "";
+  if (token) {
+    const tokenClient = createTokenClient(SUPABASE_URL, SUPABASE_KEY, {
+      global: { headers: { Authorization: `Bearer ${token}` } },
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    const { data: bearerClaims } = await tokenClient.auth.getClaims(token);
+    if (bearerClaims?.claims.sub) {
+      return {
+        supabase: tokenClient,
+        subject: bearerClaims.claims.sub,
+      } as const;
+    }
+  }
+
+  return {
+    response: NextResponse.json({ error: "Not signed in" }, { status: 401 }),
+  } as const;
+}

@@ -166,7 +166,8 @@ cards to the live queue without resetting the running tally.
 ## 4. Data model & flow
 
 ```
-components/Flashcards.tsx ──POST /api/vocab/[id]/review { grade, practice } ──▶
+components/Flashcards.tsx ──FIFO outbox──▶ POST /api/vocab/[id]/review
+  { reviewId, grade, practice } ──▶
   app/api/vocab/[id]/review/route.ts
      ├─ load card SRS state (RLS-scoped)
      ├─ if (practice && isEarly): keep the schedule unchanged
@@ -181,12 +182,16 @@ components/Flashcards.tsx ──POST /api/vocab/[id]/review { grade, practice } 
 - **Scheduler is server-side.** The client only sends a grade and trusts the
   returned card; it never computes intervals. This keeps one source of truth and
   prevents client clock skew from corrupting schedules.
-- **Optimistic, recoverable UI.** The component advances immediately, allows one
-  review request at a time, and restores the exact prior queue/progress if saving
-  fails.
+- **Optimistic, recoverable UI.** The component advances immediately while a
+  bounded FIFO outbox persists reviews strictly one at a time. A failure pauses
+  the queue without discarding the failed command; **Retry** sends that command
+  again with the same idempotency key before continuing.
 - **Atomic persistence.** Migration `0008_atomic_reviews.sql` commits the schedule
   and history together. Concurrent requests based on stale state return `409`
   instead of overwriting a newer review.
+- **Idempotent retries.** Migration `0009_review_outbox.sql` gives each client
+  command a per-user unique `client_review_id`. A lost response can therefore be
+  retried safely without applying the grade or appending history twice.
 - **`reviews` table.** Append-only log of every grade with interval/ease
   snapshots and `elapsed_days`. Not read by the scheduler today — it exists so a
   future FSRS upgrade and stats views have the history they need.
@@ -199,11 +204,13 @@ components/Flashcards.tsx ──POST /api/vocab/[id]/review { grade, practice } 
 | `supabase/0003_srs.sql`                   | SRS columns on `vocab` + `reviews` table + RLS    |
 | `app/api/vocab/[id]/review/route.ts`      | Records a review, persists the new schedule       |
 | `lib/api.ts` → `reviewVocab()`            | Client fetch helper                               |
+| `lib/review-outbox.ts`                    | Bounded sequential persistence queue              |
 | `components/Flashcards.tsx`               | Study UI: grading, session queue, recap           |
 | `lib/types.ts` → `Vocab`, `Grade`         | SRS fields on the row + grade type                |
 | `lib/decks.ts`                            | Deck ↔ column adapter (word vs kanji track)       |
 | `supabase/0004_kanji.sql`                 | `study_as_kanji` + `kanji_*` cols + `reviews.mode`|
 | `supabase/0008_atomic_reviews.sql`        | Transactional schedule + history commit RPCs      |
+| `supabase/0009_review_outbox.sql`         | Idempotent IDs for safe review retries            |
 
 ---
 
@@ -294,6 +301,7 @@ Smart Kanji tab ─ JLPT selector (cumulative N5…N1 + All) ─ buildSession(ca
 | `supabase/0006_kanji_selection.sql` | Per-word curated character arrays |
 | `supabase/0007_kanji_reconciliation.sql` | Stable card identity + inactive-card history preservation |
 | `supabase/0008_atomic_reviews.sql` | Atomic Smart Kanji review commits |
+| `supabase/0009_review_outbox.sql` | Idempotent review commands and safe retries |
 | `lib/kanjiapi.ts` | kanjiapi.dev fetch + normalize + DB cache |
 | `lib/furigana.ts` | kuroshiro furigana → per-kanji reading |
 | `lib/kanji-sync.ts` | Desired selections ↔ active/inactive `kanji_cards` reconciliation |
@@ -306,7 +314,7 @@ Smart Kanji tab ─ JLPT selector (cumulative N5…N1 + All) ─ buildSession(ca
 ## 5. To enable it
 
 After `0002_auth_rls.sql`, run `0003_srs.sql` through
-`0008_atomic_reviews.sql` in numeric order. Existing cards keep their schedules;
+`0009_review_outbox.sql` in numeric order. Existing cards keep their schedules;
 `0007` consolidates any legacy rename duplicates by keeping the most recently
 reviewed/mature schedule and reattaching the merged review history. Words remain outside Kanji decks until
 `study_as_kanji` is enabled.

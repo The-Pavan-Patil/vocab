@@ -67,9 +67,10 @@ the top of [`supabase/0002_auth_rls.sql`](./supabase/0002_auth_rls.sql), and run
 
 ### 5. Enable study decks and scheduling
 In **SQL Editor**, run the remaining migrations in numeric order:
-`0003_srs.sql` through `0008_atomic_reviews.sql`. They add the independent word/Kanji schedules,
-per-character Smart Kanji cards, curated selections, lossless reconciliation, and atomic review
-history. Existing words enter the flashcard rotation as new cards. How the scheduler works:
+`0003_srs.sql` through `0009_review_outbox.sql`. They add the independent word/Kanji schedules,
+per-character Smart Kanji cards, curated selections, lossless reconciliation, atomic review
+commits and history, and idempotent review retries. Existing words enter the flashcard rotation
+as new cards. How the scheduler works:
 [`docs/spaced-repetition.md`](./docs/spaced-repetition.md).
 
 ## Import file format

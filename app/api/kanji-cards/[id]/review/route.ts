@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
-import { requireUser } from "@/lib/supabase/require-user";
+import { requireReviewSession } from "@/lib/supabase/require-user";
 import { isEarly, schedule, KANJI_TUNING, type Grade } from "@/lib/srs";
 import { readSrs } from "@/lib/decks";
+import { isReviewId } from "@/lib/review-command";
 
 export const runtime = "nodejs";
 
@@ -10,15 +11,15 @@ type Params = { params: Promise<{ id: string }> };
 const GRADES: Grade[] = ["remember", "right", "wrong"];
 
 // POST /api/kanji-cards/[id]/review — record a smart-deck (kanji-in-word) review.
-// Body: { grade, practice? }. Reuses the SM-2 scheduler with KANJI_TUNING; the
-// kanji_cards SRS columns use base names, so readSrs/writeSrs("word") apply.
+// Body: { reviewId, grade, practice? }. Reuses the SM-2 scheduler with
+// KANJI_TUNING; the kanji_cards SRS columns use base names.
 export async function POST(request: Request, { params }: Params) {
-  const auth = await requireUser();
+  const auth = await requireReviewSession();
   if ("response" in auth) return auth.response;
 
   const { id } = await params;
 
-  let body: { grade?: unknown; practice?: unknown };
+  let body: { grade?: unknown; practice?: unknown; reviewId?: unknown };
   try {
     body = await request.json();
   } catch {
@@ -32,6 +33,13 @@ export async function POST(request: Request, { params }: Params) {
       { status: 400 }
     );
   }
+  if (!isReviewId(body.reviewId)) {
+    return NextResponse.json(
+      { error: "reviewId must be a valid UUID" },
+      { status: 400 }
+    );
+  }
+  const reviewId = body.reviewId;
   const practice = body.practice === true;
 
   const { data: card, error: readErr } = await auth.supabase
@@ -84,6 +92,7 @@ export async function POST(request: Request, { params }: Params) {
       p_ease_after: log.ease_after,
       p_elapsed_days: log.elapsed_days,
       p_reviewed_at: new Date(reviewedAt).toISOString(),
+      p_client_review_id: reviewId,
     })
     .maybeSingle();
   if (commitError) {

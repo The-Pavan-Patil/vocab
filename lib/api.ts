@@ -102,7 +102,7 @@ export async function deleteVocab(id: string): Promise<void> {
 export async function reviewVocab(
   id: string,
   grade: Grade,
-  opts: { practice?: boolean; mode?: StudyMode } = {}
+  opts: { reviewId: string; practice?: boolean; mode?: StudyMode }
 ): Promise<Vocab> {
   const res = await fetch(`/api/vocab/${id}/review`, {
     method: "POST",
@@ -111,6 +111,7 @@ export async function reviewVocab(
       grade,
       practice: opts.practice ?? false,
       mode: opts.mode ?? "word",
+      reviewId: opts.reviewId,
     }),
   });
   const json = await parseJson(res);
@@ -149,12 +150,16 @@ export async function syncKanjiCards(): Promise<{
 export async function reviewKanjiCard(
   id: string,
   grade: Grade,
-  opts: { practice?: boolean } = {}
+  opts: { reviewId: string; practice?: boolean }
 ): Promise<KanjiCard> {
   const res = await fetch(`/api/kanji-cards/${id}/review`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ grade, practice: opts.practice ?? false }),
+    body: JSON.stringify({
+      grade,
+      practice: opts.practice ?? false,
+      reviewId: opts.reviewId,
+    }),
   });
   const json = await parseJson(res);
   ensureOk(res, json, "Failed to save review");

@@ -1,6 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   Check,
   Clock,
@@ -22,10 +29,18 @@ import {
 } from "@/lib/srs";
 import { deckCard, type StudyMode } from "@/lib/decks";
 import { reviewVocab } from "@/lib/api";
+import { createReviewId } from "@/lib/review-command";
+import { useReviewOutbox } from "@/hooks/use-review-outbox";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Spinner } from "@/components/ui/spinner";
 import { Card } from "@/components/ui/card";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  Alert,
+  AlertAction,
+  AlertDescription,
+  AlertTitle,
+} from "@/components/ui/alert";
 import {
   Empty,
   EmptyDescription,
@@ -44,6 +59,14 @@ import {
 
 const byCategory = (list: Vocab[], cat: string) =>
   cat === "all" ? list : list.filter((v) => v.category === cat);
+
+type VocabReviewCommand = {
+  reviewId: string;
+  cardId: string;
+  grade: Grade;
+  practice: boolean;
+  mode: StudyMode;
+};
 
 // "in 45 min" / "in 3 hours" / "in 2 days" for the caught-up screen.
 function humanizeUntil(ms: number): string {
@@ -98,9 +121,43 @@ export default function Flashcards({
   const [lapsedIds, setLapsedIds] = useState<Set<string>>(() => new Set());
   const [flipped, setFlipped] = useState(false);
   const [showHint, setShowHint] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [grading, setGrading] = useState(false);
-  const gradingRef = useRef(false);
+  const interactionHandledRef = useRef(false);
+
+  const sendReview = useCallback(
+    (command: VocabReviewCommand) =>
+      reviewVocab(command.cardId, command.grade, {
+        reviewId: command.reviewId,
+        practice: command.practice,
+        mode: command.mode,
+      }),
+    []
+  );
+  const applySavedReview = useCallback(
+    (updated: Vocab) => {
+      // Re-project the raw server row for this deck so our working copy keeps
+      // reading the right schedule (no-op for the word deck).
+      const projected = deckCard(updated, mode);
+      setCards((current) =>
+        current.map((item) =>
+          item.id === projected.id ? projected : item
+        )
+      );
+    },
+    [mode]
+  );
+  const reviewOutbox = useReviewOutbox<VocabReviewCommand, Vocab>({
+    send: sendReview,
+    onSuccess: applySavedReview,
+  });
+  const sessionLocked = reviewOutbox.pendingCount > 0;
+  const reviewBlocked = reviewOutbox.blocked;
+
+  // A ref closes the tiny same-render window where a fast double-click could
+  // enqueue the same visible card twice. The next render represents a new card
+  // interaction and unlocks the ref.
+  useLayoutEffect(() => {
+    interactionHandledRef.current = false;
+  });
 
   // Load the saved session size once on mount. The first render already used the
   // server default (100), so applying the stored value here is a safe
@@ -149,7 +206,6 @@ export default function Flashcards({
     setLapsedIds(new Set());
     setFlipped(false);
     setShowHint(false);
-    setError(null);
   }
 
   const card = remaining[0];
@@ -159,20 +215,20 @@ export default function Flashcards({
   // (Re)start a session against the latest schedules / a fresh clock. Runs in an
   // event handler, so reading Date.now() here is allowed.
   function restart() {
-    if (gradingRef.current) return;
+    if (sessionLocked) return;
     setNow(Date.now());
     setCram(true); // re-study now, ignoring due dates (see buildSession cram)
     setSessionId((n) => n + 1);
   }
   function changeCategory(next: string) {
-    if (gradingRef.current) return;
+    if (sessionLocked) return;
     setNow(Date.now());
     setCategory(next);
   }
   // Change the per-session new-card cap and remember it for next time. The
   // sessionToken dep on `newLimit` rebuilds the queue.
   function changeSessionSize(next: number) {
-    if (gradingRef.current) return;
+    if (sessionLocked) return;
     if (typeof window !== "undefined") {
       window.localStorage.setItem(
         `vocab:sessionSize:${mode}`,
@@ -198,7 +254,7 @@ export default function Flashcards({
   // run ("increase the session"), or resumes after finishing ("keep going").
   // Oldest-added first, matching buildSession, so old words aren't starved.
   function addMore() {
-    if (gradingRef.current) return;
+    if (sessionLocked) return;
     const more = byCategory(cards, category)
       .filter((c) => isNew(c) && !queuedIds.has(c.id))
       .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at))
@@ -210,27 +266,32 @@ export default function Flashcards({
 
   // Grade the current card. Advances optimistically (snappy), then persists in
   // the background — the server is the source of truth for the next interval.
-  async function grade(g: Grade) {
+  function grade(g: Grade) {
     const cur = remaining[0];
-    if (!cur || gradingRef.current) return;
-    gradingRef.current = true;
-    setGrading(true);
+    if (!cur || reviewBlocked || interactionHandledRef.current) return;
+    interactionHandledRef.current = true;
     // Reviewing a card before it's due (only reachable while cramming) is a
     // practice rep: the server logs it but leaves the schedule untouched, so
     // cramming can't inflate intervals.
     const practice = isEarly(cur, Date.now());
-    const beforeQueue = remaining;
-    const beforeReviewed = new Set(reviewedIds);
-    const beforeLapsed = new Set(lapsedIds);
-    const beforeFlipped = flipped;
-    const beforeHint = showHint;
+    const accepted = reviewOutbox.enqueue({
+      reviewId: createReviewId(),
+      cardId: cur.id,
+      grade: g,
+      practice,
+      mode,
+    });
+    if (!accepted) {
+      interactionHandledRef.current = false;
+      return;
+    }
+
     setReviewedIds((s) => (s.has(cur.id) ? s : new Set(s).add(cur.id)));
     if (g === "wrong") {
       setLapsedIds((s) => (s.has(cur.id) ? s : new Set(s).add(cur.id)));
     }
     setFlipped(false);
     setShowHint(false);
-    setError(null);
     const rest = remaining.slice(1);
     if (g === "wrong") {
       // Lapse: bring it back later in this same session so it's drilled until
@@ -240,23 +301,6 @@ export default function Flashcards({
       rest.splice(at, 0, cur);
     }
     setRemaining(rest);
-    try {
-      const updated = await reviewVocab(cur.id, g, { practice, mode });
-      // Re-project the raw server row for this deck so our working copy keeps
-      // reading the right schedule (no-op for the word deck).
-      const projected = deckCard(updated, mode);
-      setCards((cs) => cs.map((c) => (c.id === projected.id ? projected : c)));
-    } catch (e) {
-      setRemaining(beforeQueue);
-      setReviewedIds(beforeReviewed);
-      setLapsedIds(beforeLapsed);
-      setFlipped(beforeFlipped);
-      setShowHint(beforeHint);
-      setError((e as Error).message);
-    } finally {
-      gradingRef.current = false;
-      setGrading(false);
-    }
   }
 
   // Keyboard: not flipped → Space/Enter flips, R = Remember. Flipped → ←/1 =
@@ -274,7 +318,12 @@ export default function Flashcards({
       ) {
         return; // don't hijack the category select, nav, or any text field
       }
-      if (remaining.length === 0 || gradingRef.current) return;
+      if (
+        remaining.length === 0 ||
+        reviewBlocked ||
+        interactionHandledRef.current
+      )
+        return;
       if (e.key === "h" || e.key === "H") {
         setShowHint((s) => !s);
         return;
@@ -303,7 +352,7 @@ export default function Flashcards({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [flipped, remaining]);
+  }, [flipped, remaining, reviewBlocked]);
 
   if (vocab.length === 0) {
     return (
@@ -327,12 +376,12 @@ export default function Flashcards({
 
   return (
     <div className="mx-auto flex max-w-xl flex-col gap-5">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-2">
           <Select
             value={category}
             onValueChange={changeCategory}
-            disabled={grading}
+            disabled={sessionLocked}
           >
             <SelectTrigger className="w-40">
               <SelectValue />
@@ -353,7 +402,7 @@ export default function Flashcards({
             onValueChange={(v) =>
               changeSessionSize(v === "all" ? Infinity : Number(v))
             }
-            disabled={grading}
+            disabled={sessionLocked}
           >
             <SelectTrigger className="w-36" aria-label="New cards per session">
               <SelectValue />
@@ -372,17 +421,29 @@ export default function Flashcards({
             </SelectContent>
           </Select>
         </div>
-        {reviewedCount > 0 && (
-          <span className="text-sm text-muted-foreground">
-            {reviewedCount} reviewed
-          </span>
-        )}
+        <div className="flex items-center gap-2">
+          {reviewOutbox.pendingCount > 0 && !reviewOutbox.error && (
+            <Badge variant="outline">
+              <Spinner data-icon="inline-start" /> Saving {reviewOutbox.pendingCount}
+            </Badge>
+          )}
+          {reviewedCount > 0 && (
+            <span className="text-sm text-muted-foreground">
+              {reviewedCount} reviewed
+            </span>
+          )}
+        </div>
       </div>
 
-      {error && (
+      {reviewOutbox.error && (
         <Alert variant="destructive">
           <AlertTitle>Couldn’t save that review</AlertTitle>
-          <AlertDescription>{error}</AlertDescription>
+          <AlertDescription>{reviewOutbox.error}</AlertDescription>
+          <AlertAction>
+            <Button size="sm" variant="outline" onClick={reviewOutbox.retry}>
+              Retry
+            </Button>
+          </AlertAction>
         </Alert>
       )}
 
@@ -408,7 +469,7 @@ export default function Flashcards({
           moreBatch={moreBatch}
           onRestart={restart}
           onStudyMore={addMore}
-          busy={grading}
+          busy={sessionLocked}
         />
       ) : (
         <>
@@ -416,7 +477,7 @@ export default function Flashcards({
           <button
             type="button"
             onClick={() => setFlipped((f) => !f)}
-            disabled={grading}
+            disabled={reviewBlocked}
             aria-label={flipped ? "Show word" : "Flip to answer"}
             className="block w-full focus-visible:outline-none"
           >
@@ -474,7 +535,7 @@ export default function Flashcards({
                 size="lg"
                 className="w-full max-w-xs"
                 onClick={() => grade("remember")}
-                disabled={grading}
+                disabled={reviewBlocked}
               >
                 <Check data-icon="inline-start" aria-hidden /> I remember
               </Button>
@@ -490,11 +551,15 @@ export default function Flashcards({
                   variant="outline"
                   className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
                   onClick={() => grade("wrong")}
-                  disabled={grading}
+                  disabled={reviewBlocked}
                 >
                   <X data-icon="inline-start" aria-hidden /> Forgot
                 </Button>
-                <Button size="lg" onClick={() => grade("right")} disabled={grading}>
+                <Button
+                  size="lg"
+                  onClick={() => grade("right")}
+                  disabled={reviewBlocked}
+                >
                   <Check data-icon="inline-start" aria-hidden /> Got it
                 </Button>
               </div>
@@ -530,7 +595,7 @@ export default function Flashcards({
                 size="sm"
                 className="h-auto p-0 text-xs"
                 onClick={addMore}
-                disabled={grading}
+                disabled={sessionLocked}
               >
                 Add {moreBatch} more · {availableNew} new waiting
               </Button>
@@ -543,7 +608,7 @@ export default function Flashcards({
               variant="ghost"
               size="icon-lg"
               onClick={restart}
-              disabled={grading}
+              disabled={sessionLocked}
               aria-label="Restart session"
             >
               <RotateCcw aria-hidden />
@@ -552,7 +617,7 @@ export default function Flashcards({
               variant="ghost"
               size="icon-lg"
               onClick={() => setShowHint((s) => !s)}
-              disabled={grading}
+              disabled={reviewBlocked}
               aria-pressed={showHint}
               aria-label={showHint ? "Hide Marathi hint" : "Show Marathi hint"}
               className={showHint ? "text-primary" : undefined}
