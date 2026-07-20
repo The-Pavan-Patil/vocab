@@ -8,7 +8,7 @@ import {
   useState,
 } from "react";
 import { Check, Clock, Languages, Loader2, RotateCcw, Sparkles, X } from "lucide-react";
-import type { KanjiCard, KanjiInfo } from "@/lib/types";
+import type { KanjiCard, KanjiInfo, KanjiPromptPart } from "@/lib/types";
 import {
   NEW_CARDS_PER_SESSION,
   RELEARN_GAP,
@@ -27,6 +27,7 @@ import {
 } from "@/lib/kanji-deck";
 import { fetchKanji, fetchKanjiCards, reviewKanjiCard, syncKanjiCards } from "@/lib/api";
 import { createReviewId } from "@/lib/review-command";
+import { cn } from "@/lib/utils";
 import { useReviewOutbox } from "@/hooks/use-review-outbox";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -96,15 +97,59 @@ type KanjiReviewCommand = {
 
 // The word with the target kanji emphasized — "what reading does THIS take here?"
 function WordWithFocus({ word, char }: { word: string; char: string }) {
-  return (
-    <>
-      {[...word].map((c, i) => (
-        <span key={i} className={c === char ? "text-primary" : "text-muted-foreground/70"}>
-          {c}
-        </span>
-      ))}
-    </>
-  );
+  return <FocusedSurface surface={word} char={char} />;
+}
+
+function FocusedSurface({ surface, char }: { surface: string; char: string }) {
+  return [...surface].map((character, index) => (
+    <span
+      key={index}
+      className={cn(
+        "text-muted-foreground/70",
+        character === char && "text-primary"
+      )}
+    >
+      {character}
+    </span>
+  ));
+}
+
+function WordWithReadingHints({
+  word,
+  char,
+  parts,
+}: {
+  word: string;
+  char: string;
+  parts: KanjiPromptPart[] | null | undefined;
+}) {
+  const safeParts =
+    Array.isArray(parts) &&
+    parts.length > 0 &&
+    parts.every(
+      (part) =>
+        typeof part?.surface === "string" &&
+        (part.reading === null || typeof part.reading === "string")
+    ) &&
+    parts.map((part) => part.surface).join("") === word
+      ? parts
+      : [{ surface: word, reading: null }];
+
+  return safeParts.map((part, index) => {
+    const surface = <FocusedSurface surface={part.surface} char={char} />;
+    return part.reading ? (
+      <ruby key={index}>
+        {surface}
+        <rp>(</rp>
+        <rt className="text-base leading-none font-normal text-muted-foreground sm:text-lg">
+          {part.reading}
+        </rt>
+        <rp>)</rp>
+      </ruby>
+    ) : (
+      <span key={index}>{surface}</span>
+    );
+  });
 }
 
 export default function SmartKanjiDeck({
@@ -536,8 +581,21 @@ export default function SmartKanjiDeck({
             <Card className="relative flex h-64 cursor-pointer select-none flex-col items-center justify-center gap-3 overflow-hidden px-6 text-center transition-colors hover:border-primary/40 sm:h-80 lg:h-96">
               {!flipped ? (
                 <>
-                  <div className="jp text-6xl leading-tight font-medium break-words sm:text-7xl">
-                    <WordWithFocus word={card.word} char={card.character} />
+                  <div
+                    className={cn(
+                      "jp text-6xl font-medium break-words sm:text-7xl",
+                      isAll ? "leading-[1.5]" : "leading-tight"
+                    )}
+                  >
+                    {isAll ? (
+                      <WordWithReadingHints
+                        word={card.word}
+                        char={card.character}
+                        parts={card.word_prompt_parts}
+                      />
+                    ) : (
+                      <WordWithFocus word={card.word} char={card.character} />
+                    )}
                   </div>
                   <div className="mt-2 text-xs tracking-wide text-muted-foreground/60 uppercase">
                     Reading of{" "}

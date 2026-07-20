@@ -128,6 +128,14 @@ export type KanjiInfo = {
   words: KanjiWord[]; // example words that use this kanji
 };
 
+// Ordered display metadata for the All Kanjis prompt. A non-null reading is a
+// safe furigana hint for a segment whose kanji were all turned off in the
+// per-word study selection.
+export type KanjiPromptPart = {
+  surface: string;
+  reading: string | null;
+};
+
 // A smart-deck study item: one kanji as it appears in one of the user's words.
 export type KanjiCard = {
   id: string;
@@ -136,6 +144,7 @@ export type KanjiCard = {
   word: string; // source word, e.g. 食べる
   reading: string | null; // the kanji's reading in this word, e.g. た
   word_reading: string | null; // full word reading, e.g. たべる
+  word_prompt_parts: KanjiPromptPart[] | null;
   word_meaning: string | null;
   vocab_id: string;
   active: boolean;

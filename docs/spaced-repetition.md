@@ -280,7 +280,10 @@ Smart Kanji tab ─ JLPT selector (cumulative N5…N1 + All) ─ buildSession(ca
 - **Selection is explicit when curated.** The picker defaults JLPT-graded kanji
   on and ungraded kanji off. Once the user saves an array, exactly those kanji
   become active cards; explicitly selected ungraded kanji are allowed and appear
-  under **All levels**.
+  under **All levels**. In **All Kanjis**, ordered `word_prompt_parts` show
+  furigana above segments made entirely from turned-off kanji, while selected
+  kanji remain unhinted. Mixed unsplittable segments remain unhinted rather than
+  displaying a guessed partial reading. The JLPT Smart Kanji prompt is unchanged.
 - **Population is automatic + lossless.** `lib/kanji-sync.ts` reconciles after
   create/edit/toggle operations and performs a full backfill on first deck load.
   Card identity is `(user, vocab_id, character)`, so word/meaning/reading metadata
@@ -302,6 +305,7 @@ Smart Kanji tab ─ JLPT selector (cumulative N5…N1 + All) ─ buildSession(ca
 | `supabase/0007_kanji_reconciliation.sql` | Stable card identity + inactive-card history preservation |
 | `supabase/0008_atomic_reviews.sql` | Atomic Smart Kanji review commits |
 | `supabase/0009_review_outbox.sql` | Idempotent review commands and safe retries |
+| `supabase/0010_kanji_prompt_hints.sql` | Safe All Kanjis furigana prompt metadata |
 | `lib/kanjiapi.ts` | kanjiapi.dev fetch + normalize + DB cache |
 | `lib/furigana.ts` | kuroshiro furigana → per-kanji reading |
 | `lib/kanji-sync.ts` | Desired selections ↔ active/inactive `kanji_cards` reconciliation |
@@ -314,7 +318,7 @@ Smart Kanji tab ─ JLPT selector (cumulative N5…N1 + All) ─ buildSession(ca
 ## 5. To enable it
 
 After `0002_auth_rls.sql`, run `0003_srs.sql` through
-`0009_review_outbox.sql` in numeric order. Existing cards keep their schedules;
+`0010_kanji_prompt_hints.sql` in numeric order. Existing cards keep their schedules;
 `0007` consolidates any legacy rename duplicates by keeping the most recently
 reviewed/mature schedule and reattaching the merged review history. Words remain outside Kanji decks until
 `study_as_kanji` is enabled.

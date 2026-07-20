@@ -4,7 +4,7 @@
 // ---------------------------------------------------------------------------
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { KanjiInfo, Vocab } from "./types.ts";
+import type { KanjiInfo, KanjiPromptPart, Vocab } from "./types.ts";
 import { getKanji } from "./kanjiapi.ts";
 import { kanjiChars } from "./kanji-deck.ts";
 import { selectionForWord } from "./kanji-selection.ts";
@@ -32,6 +32,7 @@ export type DesiredKanjiCard = {
   word_meaning: string | null;
   reading?: string | null;
   word_reading?: string | null;
+  word_prompt_parts?: KanjiPromptPart[] | null;
 };
 
 export type KanjiSyncStats = {
@@ -52,6 +53,30 @@ type KanjiSyncOptions = {
 
 const cardKey = (vocabId: string | null, character: string) =>
   `${vocabId ?? ""}\u0000${character}`;
+
+/**
+ * Preserve the analyzer's ordered segments while revealing readings only for
+ * segments made entirely from kanji the user turned off. A mixed segment such
+ * as 今日=きょう stays unhinted if either character is selected because its
+ * reading cannot be split safely between the characters.
+ */
+export function buildWordPromptParts(
+  segments: FuriganaSegment[],
+  selectedCharacters: string[]
+): KanjiPromptPart[] {
+  const selected = new Set(selectedCharacters);
+  return segments.map((segment) => {
+    const characters = kanjiChars(segment.surface);
+    const canReveal =
+      segment.isKanji &&
+      characters.length > 0 &&
+      characters.every((character) => !selected.has(character));
+    return {
+      surface: segment.surface,
+      reading: canReveal ? segment.reading : null,
+    };
+  });
+}
 
 async function mapWithConcurrency<T, R>(
   items: T[],
@@ -109,6 +134,12 @@ export async function buildDesiredKanjiCards(
     const wordReading = segments ? dottedReading(segments) || null : null;
     const readings = segments ? singleKanjiReadings(segments) : null;
     const infos = await Promise.all(characters.map(loadInfo));
+    const promptSelectedCharacters = explicit
+      ? characters
+      : characters.filter((_, index) => infos[index]?.jlpt != null);
+    const wordPromptParts = segments
+      ? buildWordPromptParts(segments, promptSelectedCharacters)
+      : null;
 
     return characters.flatMap((character, index): DesiredKanjiCard[] => {
       const info = infos[index];
@@ -125,6 +156,7 @@ export async function buildDesiredKanjiCards(
       if (segments) {
         row.reading = readings?.get(character) ?? null;
         row.word_reading = wordReading;
+        row.word_prompt_parts = wordPromptParts;
       }
       return [row];
     });

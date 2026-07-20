@@ -57,6 +57,12 @@ two coverage-critical steps (see [`lib/kanji-sync.ts`](../lib/kanji-sync.ts)):
    deselected cards remain stored but inactive so reselecting restores their SRS
    schedule.
 
+In **All Kanjis**, a turned-off kanji may still appear as context inside a
+selected kanji's source word. Its safe segment reading is shown as furigana so
+the prompt tests only the selected characters. For example, selecting only 食 in
+食事 shows じ above 事; selecting both characters hides both readings. An
+unsplittable segment mixing selected and unselected characters is left unhinted.
+
 At study time the deck is filtered by an **active JLPT level**, which is
 **cumulative** (`matchesLevel()`):
 

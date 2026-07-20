@@ -4,6 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { KanjiInfo, Vocab } from "./types.ts";
 import {
   buildDesiredKanjiCards,
+  buildWordPromptParts,
   planKanjiReconciliation,
   type DesiredKanjiCard,
 } from "./kanji-sync.ts";
@@ -47,7 +48,50 @@ test("explicit selections create only selected cards, including ungraded kanji",
   assert.equal(rows.length, 1);
   assert.equal(rows[0].character, "食");
   assert.equal(rows[0].reading, "しょく");
+  assert.deepEqual(rows[0].word_prompt_parts, [
+    { surface: "食", reading: null },
+    { surface: "事", reading: "じ" },
+  ]);
   assert.equal(rows[0].active, true);
+});
+
+test("selected kanji remain unhinted on every card", () => {
+  const parts = buildWordPromptParts(
+    [
+      { surface: "食", reading: "しょく", isKanji: true },
+      { surface: "事", reading: "じ", isKanji: true },
+    ],
+    ["食", "事"]
+  );
+
+  assert.deepEqual(parts, [
+    { surface: "食", reading: null },
+    { surface: "事", reading: null },
+  ]);
+});
+
+test("fully unselected compound segments keep their safe group reading", () => {
+  const parts = buildWordPromptParts(
+    [
+      { surface: "今日", reading: "きょう", isKanji: true },
+      { surface: "食", reading: "しょく", isKanji: true },
+    ],
+    ["食"]
+  );
+
+  assert.deepEqual(parts, [
+    { surface: "今日", reading: "きょう" },
+    { surface: "食", reading: null },
+  ]);
+});
+
+test("mixed ambiguous segments never invent a partial reading", () => {
+  const parts = buildWordPromptParts(
+    [{ surface: "今日", reading: "きょう", isKanji: true }],
+    ["今"]
+  );
+
+  assert.deepEqual(parts, [{ surface: "今日", reading: null }]);
 });
 
 test("uncurated words include graded kanji and skip ungraded kanji", async () => {
@@ -58,10 +102,17 @@ test("uncurated words include graded kanji and skip ungraded kanji", async () =>
     {
       getKanji: async (_supabase, character) =>
         info(character, character === "食" ? 5 : null),
-      segment: async () => [],
+      segment: async () => [
+        { surface: "食", reading: "しょく", isKanji: true },
+        { surface: "事", reading: "じ", isKanji: true },
+      ],
     }
   );
   assert.deepEqual(rows.map((row) => row.character), ["食"]);
+  assert.deepEqual(rows[0].word_prompt_parts, [
+    { surface: "食", reading: null },
+    { surface: "事", reading: "じ" },
+  ]);
 });
 
 test("a transient segmentation failure leaves reading fields untouched", async () => {
@@ -75,6 +126,7 @@ test("a transient segmentation failure leaves reading fields untouched", async (
   assert.equal(rows.length, 1);
   assert.equal("reading" in rows[0], false);
   assert.equal("word_reading" in rows[0], false);
+  assert.equal("word_prompt_parts" in rows[0], false);
 });
 
 test("reconciliation updates, activates, creates, and deactivates without deleting", () => {
