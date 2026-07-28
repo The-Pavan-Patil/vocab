@@ -4,10 +4,12 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
 import { Check, Clock, Languages, Loader2, RotateCcw, Sparkles, X } from "lucide-react";
+import { toRomaji } from "wanakana";
 import type { KanjiCard, KanjiInfo, KanjiPromptPart } from "@/lib/types";
 import {
   NEW_CARDS_PER_SESSION,
@@ -21,6 +23,7 @@ import {
   ALL_LEVELS,
   JLPT_LEVELS,
   groupByKanji,
+  kanjiChars,
   levelLabel,
   matchesLevel,
   refreshQueuedKanjiCards,
@@ -150,6 +153,25 @@ function WordWithReadingHints({
       <span key={index}>{surface}</span>
     );
   });
+}
+
+function romajiReading(reading: string | null | undefined): string {
+  if (!reading?.trim()) return "";
+  return toRomaji(reading).trim();
+}
+
+function compactReadings(readings: string[]): string {
+  const seen = new Set<string>();
+  return readings
+    .map(romajiReading)
+    .filter(Boolean)
+    .filter((reading) => {
+      if (seen.has(reading)) return false;
+      seen.add(reading);
+      return true;
+    })
+    .slice(0, 6)
+    .join(", ");
 }
 
 export default function SmartKanjiDeck({
@@ -317,19 +339,39 @@ export default function SmartKanjiDeck({
   const card = remaining[0];
   const reviewedCount = reviewedIds.size;
   const done = sessionTotal - remaining.length;
-  const currentChar = card?.character;
+  const currentWordKanji = useMemo(
+    () => (card ? kanjiChars(card.word) : []),
+    [card]
+  );
+  const currentWordKanjiKey = currentWordKanji.join("");
 
-  // Lazily enrich the back of the current card with kanjiapi data.
+  // Lazily enrich the back of the current card with kanjiapi data for every
+  // kanji in the word, not just the one being reviewed.
   useEffect(() => {
-    if (!currentChar || info[currentChar]) return;
+    const missing = currentWordKanji.filter((character) => !info[character]);
+    if (missing.length === 0) return;
     let active = true;
-    fetchKanji(currentChar)
-      .then((k) => active && setInfo((m) => ({ ...m, [currentChar]: k })))
-      .catch(() => {});
+    Promise.all(
+      missing.map((character) =>
+        fetchKanji(character)
+          .then((kanjiInfo) => [character, kanjiInfo] as const)
+          .catch(() => [character, null] as const)
+      )
+    ).then((entries) => {
+      if (!active) return;
+      const loaded = entries.filter(
+        (entry): entry is readonly [string, KanjiInfo] => entry[1] !== null
+      );
+      if (loaded.length === 0) return;
+      setInfo((current) => ({
+        ...current,
+        ...Object.fromEntries(loaded),
+      }));
+    });
     return () => {
       active = false;
     };
-  }, [currentChar, info]);
+  }, [currentWordKanji, currentWordKanjiKey, info]);
 
   function changeLevel(next: number) {
     if (sessionLocked) return;
@@ -451,7 +493,8 @@ export default function SmartKanjiDeck({
     );
   }
 
-  const ki = currentChar ? info[currentChar] : undefined;
+  const wordReading = card?.word_reading || card?.reading || "";
+  const wordRomaji = romajiReading(wordReading);
 
   return (
     <div className="mx-auto flex max-w-xl flex-col gap-5">
@@ -578,52 +621,83 @@ export default function SmartKanjiDeck({
             aria-label={flipped ? "Show word" : "Flip to reading"}
             className="block w-full focus-visible:outline-none"
           >
-            <Card className="relative flex h-64 cursor-pointer select-none flex-col items-center justify-center gap-3 overflow-hidden px-6 text-center transition-colors hover:border-primary/40 sm:h-80 lg:h-96">
+            <Card className="relative h-64 cursor-pointer select-none overflow-hidden px-6 py-6 text-center transition-colors hover:border-primary/40 sm:h-80 sm:py-8 lg:h-96">
               {!flipped ? (
-                <>
-                  <div
-                    className={cn(
-                      "jp text-6xl font-medium break-words sm:text-7xl",
-                      isAll ? "leading-[1.5]" : "leading-tight"
-                    )}
-                  >
-                    {isAll ? (
-                      <WordWithReadingHints
-                        word={card.word}
-                        char={card.character}
-                        parts={card.word_prompt_parts}
-                      />
-                    ) : (
-                      <WordWithFocus word={card.word} char={card.character} />
-                    )}
+                <div className="grid h-full w-full grid-rows-[minmax(0,1fr)_auto] items-center gap-3">
+                  <div className="flex min-h-0 items-center justify-center">
+                    <div
+                      className={cn(
+                        "jp max-w-full font-medium break-words",
+                        isAll
+                          ? "text-5xl leading-[1.6] sm:text-6xl lg:text-7xl"
+                          : "text-6xl leading-tight sm:text-7xl"
+                      )}
+                    >
+                      {isAll ? (
+                        <WordWithReadingHints
+                          word={card.word}
+                          char={card.character}
+                          parts={card.word_prompt_parts}
+                        />
+                      ) : (
+                        <WordWithFocus word={card.word} char={card.character} />
+                      )}
+                    </div>
                   </div>
-                  <div className="mt-2 text-xs tracking-wide text-muted-foreground/60 uppercase">
+                  <div className="text-xs tracking-wide text-muted-foreground/60 uppercase">
                     Reading of{" "}
                     <span className="jp text-primary">{card.character}</span> here?
                   </div>
-                </>
+                </div>
               ) : (
-                <>
-                  {/* Full reading of the word, dotted at kanji boundaries: 行く → い.く */}
-                  <div className="jp text-5xl font-medium sm:text-6xl">
-                    {card.word_reading || card.reading || "—"}
+                <div className="flex h-full w-full flex-col items-center gap-3">
+                  <div className="shrink-0 space-y-1">
+                    {/* Full reading of the word, dotted at kanji boundaries: 行く → い.く */}
+                    <div className="jp text-4xl leading-tight font-medium sm:text-5xl">
+                      {wordReading || "—"}
+                    </div>
+                    {wordRomaji && (
+                      <div className="text-lg leading-tight text-muted-foreground sm:text-xl">
+                        {wordRomaji}
+                      </div>
+                    )}
+                    <div className="jp text-sm text-muted-foreground">{card.word}</div>
                   </div>
-                  <div className="jp text-lg text-muted-foreground">{card.word}</div>
-                  {card.reading && (
-                    <div className="text-sm text-muted-foreground">
-                      <span className="jp text-primary">{card.character}</span> ={" "}
-                      <span className="jp">{card.reading}</span>
+
+                  <div className="shrink-0 text-base leading-snug sm:text-lg">
+                    {card.word_meaning || "—"}
+                  </div>
+
+                  <div className="min-h-0 w-full flex-1 overflow-y-auto pr-1">
+                    <div className="grid gap-2">
+                      {currentWordKanji.map((character) => {
+                        const kanjiInfo = info[character];
+                        const readings = kanjiInfo
+                          ? compactReadings([...kanjiInfo.on, ...kanjiInfo.kun])
+                          : "";
+                        const meanings = kanjiInfo?.meanings.slice(0, 4).join(", ");
+                        return (
+                          <div
+                            key={character}
+                            className="grid grid-cols-[2.25rem_minmax(0,1fr)] gap-2 rounded-md border border-border/70 bg-background/45 px-2 py-1.5 text-left"
+                          >
+                            <div className="jp text-center text-2xl leading-none text-primary">
+                              {character}
+                            </div>
+                            <div className="min-w-0 space-y-0.5">
+                              <div className="truncate text-xs leading-tight text-muted-foreground">
+                                {readings || "Reading loading…"}
+                              </div>
+                              <div className="text-sm leading-snug">
+                                {meanings || "Meaning loading…"}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
-                  )}
-                  {card.word_meaning && <div className="text-base">{card.word_meaning}</div>}
-                  {ki && (
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      {ki.meanings.slice(0, 3).join(", ")}
-                      {ki.on.length > 0 && <span className="jp"> · 音 {ki.on.slice(0, 3).join("、")}</span>}
-                      {ki.kun.length > 0 && <span className="jp"> · 訓 {ki.kun.slice(0, 3).join("、")}</span>}
-                    </div>
-                  )}
-                </>
+                  </div>
+                </div>
               )}
             </Card>
           </button>

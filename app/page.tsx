@@ -25,7 +25,7 @@ const TABS = [
   { value: "kanji", label: "Kanji", short: "Kanji", icon: Languages },
   { value: "smart-kanji", label: "Smart Kanji", short: "Smart", icon: Sparkles },
   { value: "list", label: "List", short: "List", icon: List },
-  { value: "import", label: "Import", short: "Import", icon: Upload },
+  { value: "import", label: "Import", short: "Import", icon: Upload, iconOnlyNav: true },
 ];
 
 export default function Home() {
@@ -97,10 +97,15 @@ export default function Home() {
               <TabsPrimitive.Trigger
                 key={t.value}
                 value={t.value}
-                className="inline-flex items-center gap-2 rounded-full px-3.5 py-2 text-sm font-medium text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 data-[state=active]:bg-primary/10 data-[state=active]:text-primary"
+                aria-label={t.iconOnlyNav ? t.label : undefined}
+                title={t.iconOnlyNav ? t.label : undefined}
+                className={cn(
+                  "inline-flex items-center gap-2 rounded-full py-2 text-sm font-medium text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 data-[state=active]:bg-primary/10 data-[state=active]:text-primary",
+                  t.iconOnlyNav ? "px-3" : "px-3.5"
+                )}
               >
                 <t.icon className="size-4 shrink-0" aria-hidden />
-                {t.label}
+                {!t.iconOnlyNav && t.label}
               </TabsPrimitive.Trigger>
             ))}
           </TabsPrimitive.List>
