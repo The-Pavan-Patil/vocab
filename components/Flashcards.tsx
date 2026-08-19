@@ -28,6 +28,8 @@ import {
   nextDueAt,
 } from "@/lib/srs";
 import { deckCard, type StudyMode } from "@/lib/decks";
+import { answerTextSize, promptTextSize } from "@/lib/card-fit";
+import { cn } from "@/lib/utils";
 import { reviewVocab } from "@/lib/api";
 import { createReviewId } from "@/lib/review-command";
 import { useReviewOutbox } from "@/hooks/use-review-outbox";
@@ -481,41 +483,71 @@ export default function Flashcards({
             aria-label={flipped ? "Show word" : "Flip to answer"}
             className="block w-full focus-visible:outline-none"
           >
-            <Card className="relative flex h-64 cursor-pointer select-none flex-col items-center justify-center gap-3 overflow-hidden px-6 text-center transition-colors hover:border-primary/40 sm:h-80 lg:h-96">
+            <Card className="relative flex h-72 shrink-0 cursor-pointer select-none flex-col overflow-hidden px-6 text-center transition-colors hover:border-primary/40 sm:h-[22rem] lg:h-96">
               {!flipped ? (
-                <>
-                  <div className="jp text-6xl leading-tight font-medium break-words sm:text-7xl lg:text-8xl">
-                    {card.kanji}
-                  </div>
-                  {/* Word deck shows the reading up front; the Kanji deck hides
-                      it — recalling the reading from the glyph is the whole task. */}
-                  {!isKanji && card.romaji && (
-                    <div className="text-xl text-muted-foreground sm:text-2xl">
-                      {card.romaji}
+                // Front: prompt fills the free space, "tap to flip" pinned low.
+                <div className="grid h-full w-full grid-rows-[minmax(0,1fr)_auto] gap-2">
+                  <div className="flex min-h-0 flex-col items-center justify-center gap-2 overflow-hidden">
+                    <div
+                      className={cn(
+                        "jp w-full leading-tight font-medium break-words",
+                        promptTextSize(card.kanji)
+                      )}
+                    >
+                      {card.kanji}
                     </div>
-                  )}
-                  <div className="mt-2 text-xs tracking-wide text-muted-foreground/60 uppercase">
+                    {/* Word deck shows the reading up front; the Kanji deck hides
+                        it — recalling the reading from the glyph is the whole task. */}
+                    {!isKanji && card.romaji && (
+                      <div className="w-full text-lg break-words text-muted-foreground sm:text-xl">
+                        {card.romaji}
+                      </div>
+                    )}
+                  </div>
+                  <div className="text-xs tracking-wide text-muted-foreground/60 uppercase">
                     Tap to flip
                   </div>
-                </>
+                </div>
               ) : (
-                <>
+                // Back: reading (kanji deck) and the source word are pinned; the
+                // answer block between them scrolls if the meaning + tip run long,
+                // so the card itself never has to grow.
+                <div className="flex h-full w-full flex-col gap-2">
                   {/* Kanji deck reveals the reading too (recall reading + meaning). */}
                   {isKanji && card.romaji && (
-                    <div className="jp text-2xl font-medium text-muted-foreground sm:text-3xl">
+                    <div className="jp shrink-0 text-xl leading-tight font-medium break-words text-muted-foreground sm:text-2xl">
                       {card.romaji}
                     </div>
                   )}
-                  <div className="text-4xl font-medium break-words sm:text-5xl">
-                    {card.english || "—"}
+                  <div className="flex min-h-0 w-full flex-1 flex-col items-center justify-center gap-2 overflow-y-auto">
+                    <div
+                      className={cn(
+                        "w-full leading-tight font-medium break-words",
+                        answerTextSize(card.english || "—")
+                      )}
+                    >
+                      {card.english || "—"}
+                    </div>
+                    {card.category && (
+                      <Badge variant="secondary">{card.category}</Badge>
+                    )}
+                    {/* The Marathi tip rides along with the answer — reading the
+                        meaning and its mnemonic together is the point of the flip. */}
+                    {card.tips?.trim() && (
+                      <div className="w-full rounded-lg border border-accent bg-accent/40 px-3 py-1.5 text-accent-foreground">
+                        <span className="mr-1.5 text-[0.625rem] tracking-wide uppercase opacity-80">
+                          Marathi
+                        </span>
+                        <span className="jp text-sm break-words sm:text-base">
+                          {card.tips}
+                        </span>
+                      </div>
+                    )}
                   </div>
-                  {card.category && (
-                    <Badge variant="secondary">{card.category}</Badge>
-                  )}
-                  <div className="mt-2 text-xs tracking-wide text-muted-foreground/60 uppercase">
+                  <div className="jp shrink-0 truncate text-xs tracking-wide text-muted-foreground/60 uppercase">
                     {card.kanji}
                   </div>
-                </>
+                </div>
               )}
             </Card>
           </button>
@@ -626,7 +658,9 @@ export default function Flashcards({
             </Button>
           </div>
 
-          {showHint && (
+          {/* Hint panel: on the flipped face the tip already rides under the
+              answer, so only fall back to the panel when there's none to show. */}
+          {showHint && (!flipped || !card.tips?.trim()) && (
             <div className="rounded-xl border border-accent bg-accent/40 px-4 py-3 text-center text-accent-foreground">
               <span className="mr-2 text-xs tracking-wide uppercase opacity-80">
                 Marathi

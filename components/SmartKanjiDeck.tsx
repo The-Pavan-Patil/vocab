@@ -30,6 +30,7 @@ import {
 } from "@/lib/kanji-deck";
 import { fetchKanji, fetchKanjiCards, reviewKanjiCard, syncKanjiCards } from "@/lib/api";
 import { createReviewId } from "@/lib/review-command";
+import { promptTextSize, readingTextSize } from "@/lib/card-fit";
 import { cn } from "@/lib/utils";
 import { useReviewOutbox } from "@/hooks/use-review-outbox";
 import { Button } from "@/components/ui/button";
@@ -621,16 +622,17 @@ export default function SmartKanjiDeck({
             aria-label={flipped ? "Show word" : "Flip to reading"}
             className="block w-full focus-visible:outline-none"
           >
-            <Card className="relative h-64 cursor-pointer select-none overflow-hidden px-6 py-6 text-center transition-colors hover:border-primary/40 sm:h-80 sm:py-8 lg:h-96">
+            <Card className="relative h-80 shrink-0 cursor-pointer select-none overflow-hidden px-5 py-5 text-center transition-colors hover:border-primary/40 sm:h-[24rem] sm:px-6 sm:py-6 lg:h-[26rem]">
               {!flipped ? (
                 <div className="grid h-full w-full grid-rows-[minmax(0,1fr)_auto] items-center gap-3">
-                  <div className="flex min-h-0 items-center justify-center">
+                  <div className="flex min-h-0 items-center justify-center overflow-hidden">
                     <div
                       className={cn(
                         "jp max-w-full font-medium break-words",
-                        isAll
-                          ? "text-5xl leading-[1.6] sm:text-6xl lg:text-7xl"
-                          : "text-6xl leading-tight sm:text-7xl"
+                        // Furigana adds a line box above every run, so the
+                        // ruby face gets the denser step of the same scale.
+                        isAll ? "leading-[1.6]" : "leading-tight",
+                        promptTextSize(card.word, { dense: isAll })
                       )}
                     >
                       {isAll ? (
@@ -650,25 +652,34 @@ export default function SmartKanjiDeck({
                   </div>
                 </div>
               ) : (
-                <div className="flex h-full w-full flex-col items-center gap-3">
-                  <div className="shrink-0 space-y-1">
+                // The reading is pinned at the top; meaning + per-kanji notes
+                // scroll beneath it, so a word with four kanji fills exactly the
+                // same card as a word with one.
+                <div className="flex h-full w-full flex-col gap-2">
+                  <div className="shrink-0 space-y-0.5">
                     {/* Full reading of the word, dotted at kanji boundaries: 行く → い.く */}
-                    <div className="jp text-4xl leading-tight font-medium sm:text-5xl">
+                    <div
+                      className={cn(
+                        "jp leading-tight font-medium break-words",
+                        readingTextSize(wordReading || "—")
+                      )}
+                    >
                       {wordReading || "—"}
                     </div>
                     {wordRomaji && (
-                      <div className="text-lg leading-tight text-muted-foreground sm:text-xl">
+                      <div className="text-sm leading-tight break-words text-muted-foreground sm:text-base">
                         {wordRomaji}
                       </div>
                     )}
-                    <div className="jp text-sm text-muted-foreground">{card.word}</div>
+                    <div className="jp truncate text-xs text-muted-foreground sm:text-sm">
+                      {card.word}
+                    </div>
                   </div>
 
-                  <div className="shrink-0 text-base leading-snug sm:text-lg">
-                    {card.word_meaning || "—"}
-                  </div>
-
-                  <div className="min-h-0 w-full flex-1 overflow-y-auto pr-1">
+                  <div className="min-h-0 w-full flex-1 space-y-2 overflow-y-auto pr-1">
+                    <div className="text-sm leading-snug break-words sm:text-base">
+                      {card.word_meaning || "—"}
+                    </div>
                     <div className="grid gap-2">
                       {currentWordKanji.map((character) => {
                         const kanjiInfo = info[character];
@@ -679,16 +690,16 @@ export default function SmartKanjiDeck({
                         return (
                           <div
                             key={character}
-                            className="grid grid-cols-[2.25rem_minmax(0,1fr)] gap-2 rounded-md border border-border/70 bg-background/45 px-2 py-1.5 text-left"
+                            className="grid grid-cols-[2rem_minmax(0,1fr)] items-center gap-2 rounded-md border border-border/70 bg-background/45 px-2 py-1.5 text-left"
                           >
-                            <div className="jp text-center text-2xl leading-none text-primary">
+                            <div className="jp text-center text-xl leading-none text-primary sm:text-2xl">
                               {character}
                             </div>
                             <div className="min-w-0 space-y-0.5">
                               <div className="truncate text-xs leading-tight text-muted-foreground">
                                 {readings || "Reading loading…"}
                               </div>
-                              <div className="text-sm leading-snug">
+                              <div className="line-clamp-2 text-xs leading-snug sm:text-sm">
                                 {meanings || "Meaning loading…"}
                               </div>
                             </div>
