@@ -125,6 +125,41 @@
     font-family: var(--font-jp), var(--font-sans), sans-serif;
     font-feature-settings: "palt";
   }
+  /*
+   * The study cards (Flashcards, Word Kanji, All Kanjis) are a fixed stage:
+   * content fits into the card, never the reverse. Plain CSS rather than a
+   * height utility so the size can't depend on class generation, and min/max
+   * pin it against any flex or grid parent that would stretch or shrink it.
+   * The rem value rides the root font-size lever above, so the card grows
+   * with the type it holds.
+   */
+  .study-card {
+    height: 22rem;
+    min-height: 22rem;
+    max-height: 22rem;
+    overflow: hidden;
+  }
+  @media (min-width: 1024px) {
+    .study-card {
+      height: 25rem;
+      min-height: 25rem;
+      max-height: 25rem;
+    }
+  }
+  /*
+   * Furigana for characters the reader isn't being tested on: under the glyph,
+   * not over it, and sized off the base font so it stays proportional at every
+   * prompt scale. The -webkit- property is Safari's spelling; a browser that
+   * knows neither falls back to furigana above, which is still readable.
+   */
+  .furigana-under {
+    -webkit-ruby-position: after;
+    ruby-position: under;
+  }
+  .furigana-under rt {
+    font-size: 0.42em;
+    line-height: 1.1;
+  }
   /* The Sonner toast renders in a portal and doesn't inherit the root scale;
      re-couple it with a rem font-size so it matches the larger UI. */
   [data-sonner-toaster] {

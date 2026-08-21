@@ -104,12 +104,24 @@ function WordWithFocus({ word, char }: { word: string; char: string }) {
   return <FocusedSurface surface={word} char={char} />;
 }
 
-function FocusedSurface({ surface, char }: { surface: string; char: string }) {
+// `hinted` means this run carries furigana — i.e. none of its kanji are cards
+// of yours, so it's free context. Those sit a shade back from the unhinted grey
+// (kanji you also study, which stay recall targets), and the target character
+// stays in the accent colour.
+function FocusedSurface({
+  surface,
+  char,
+  hinted = false,
+}: {
+  surface: string;
+  char: string;
+  hinted?: boolean;
+}) {
   return [...surface].map((character, index) => (
     <span
       key={index}
       className={cn(
-        "text-muted-foreground/70",
+        hinted ? "text-muted-foreground/55" : "text-muted-foreground/80",
         character === char && "text-primary"
       )}
     >
@@ -140,14 +152,20 @@ function WordWithReadingHints({
       : [{ surface: word, reading: null }];
 
   return safeParts.map((part, index) => {
-    const surface = <FocusedSurface surface={part.surface} char={char} />;
+    const surface = (
+      <FocusedSurface
+        surface={part.surface}
+        char={char}
+        hinted={Boolean(part.reading)}
+      />
+    );
+    // The rt is sized in em by `.furigana-under` (globals.css) so it tracks
+    // whatever scale promptTextSize picked for the prompt.
     return part.reading ? (
       <ruby key={index}>
         {surface}
         <rp>(</rp>
-        <rt className="text-base leading-none font-normal text-muted-foreground sm:text-lg">
-          {part.reading}
-        </rt>
+        <rt className="font-normal text-muted-foreground">{part.reading}</rt>
         <rp>)</rp>
       </ruby>
     ) : (
@@ -622,16 +640,18 @@ export default function SmartKanjiDeck({
             aria-label={flipped ? "Show word" : "Flip to reading"}
             className="block w-full focus-visible:outline-none"
           >
-            <Card className="relative h-80 shrink-0 cursor-pointer select-none overflow-hidden px-5 py-5 text-center transition-colors hover:border-primary/40 sm:h-[24rem] sm:px-6 sm:py-6 lg:h-[26rem]">
+            {/* `study-card` (globals.css) fixes the size for every deck. */}
+            <Card className="study-card relative shrink-0 cursor-pointer px-5 py-5 text-center transition-colors select-none hover:border-primary/40 sm:px-6 sm:py-6">
               {!flipped ? (
                 <div className="grid h-full w-full grid-rows-[minmax(0,1fr)_auto] items-center gap-3">
                   <div className="flex min-h-0 items-center justify-center overflow-hidden">
                     <div
                       className={cn(
                         "jp max-w-full font-medium break-words",
-                        // Furigana adds a line box above every run, so the
-                        // ruby face gets the denser step of the same scale.
-                        isAll ? "leading-[1.6]" : "leading-tight",
+                        // Furigana adds a line box under every annotated run,
+                        // so the ruby face gets the denser step of the same
+                        // scale and room to breathe between lines.
+                        isAll ? "furigana-under leading-[1.6]" : "leading-tight",
                         promptTextSize(card.word, { dense: isAll })
                       )}
                     >
