@@ -483,7 +483,8 @@ export default function Flashcards({
             aria-label={flipped ? "Show word" : "Flip to answer"}
             className="block w-full focus-visible:outline-none"
           >
-            <Card className="relative flex h-72 shrink-0 cursor-pointer select-none flex-col overflow-hidden px-6 text-center transition-colors hover:border-primary/40 sm:h-[22rem] lg:h-96">
+            {/* `study-card` (globals.css) fixes the size for every deck. */}
+            <Card className="study-card relative flex shrink-0 cursor-pointer flex-col px-6 text-center transition-colors select-none hover:border-primary/40">
               {!flipped ? (
                 // Front: prompt fills the free space, "tap to flip" pinned low.
                 <div className="grid h-full w-full grid-rows-[minmax(0,1fr)_auto] gap-2">
