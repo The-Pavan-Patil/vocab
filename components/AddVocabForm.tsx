@@ -7,6 +7,7 @@ import { CATEGORIES, type VocabInput } from "@/lib/types";
 import KanjiBreakdown from "@/components/KanjiBreakdown";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Card,
   CardContent,
@@ -37,6 +38,7 @@ const EMPTY: VocabInput = {
   romaji: "",
   english: "",
   tips: "",
+  sentence: "",
   category: "noun",
   study_as_kanji: false,
 };
@@ -153,6 +155,22 @@ export default function AddVocabForm({ onAdded }: { onAdded: () => void }) {
               />
               <FieldDescription>
                 A mnemonic or meaning in your native language.
+              </FieldDescription>
+            </Field>
+
+            <Field>
+              <FieldLabel htmlFor="sentence">Sentence</FieldLabel>
+              <Textarea
+                id="sentence"
+                className="jp"
+                rows={2}
+                value={form.sentence ?? ""}
+                onChange={(e) => set("sentence", e.target.value)}
+                placeholder="例: 毎朝ご飯を食べる。"
+              />
+              <FieldDescription>
+                An example of the word in use. Shown on the back of its
+                flashcards.
               </FieldDescription>
             </Field>
 

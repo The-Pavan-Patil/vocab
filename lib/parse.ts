@@ -14,25 +14,34 @@ const HEADER_SYNONYMS: Record<ImportField, string[]> = {
   romaji: ["romaji", "reading", "pronunciation", "roumaji", "romanji"],
   english: ["english", "meaning", "english meaning", "definition", "translation"],
   tips: ["tips", "tip", "marathi", "hint", "note", "notes", "mnemonic"],
+  sentence: ["sentence", "example", "example sentence", "usage", "例文"],
   category: ["category", "type", "pos", "part of speech", "class"],
 };
 
+// Positional fallback for headerless files. `sentence` is appended LAST rather
+// than in COLUMNS order so the long-standing 5-column layout (…tips, category)
+// keeps importing the way it always has; an exported file carries headers, so
+// its own column order is recovered by mapHeaders instead.
 const FIELD_ORDER: ImportField[] = [
   "kanji",
   "romaji",
   "english",
   "tips",
   "category",
+  "sentence",
 ];
 
 // Priority for *header* detection. `tips` is checked before `english` so a label
 // like "Marathi meaning / my tips" claims the tips column via "marathi"/"tips"
 // instead of being grabbed by english's broad "meaning" synonym (which would
-// otherwise overwrite the real English column with the blank tips cell).
+// otherwise overwrite the real English column with the blank tips cell). For the
+// same reason `sentence` is checked before `english`, so "Example sentence /
+// meaning in use" claims the sentence column.
 const HEADER_MATCH_ORDER: ImportField[] = [
   "kanji",
   "romaji",
   "tips",
+  "sentence",
   "english",
   "category",
 ];
@@ -81,6 +90,7 @@ function rowToVocab(
     romaji: out.romaji ?? null,
     english: out.english ?? null,
     tips: out.tips ?? null,
+    sentence: out.sentence ?? null,
     category: out.category ?? null,
   };
 }

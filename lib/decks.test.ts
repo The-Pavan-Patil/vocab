@@ -24,6 +24,7 @@ function vocab(over: Partial<Vocab> = {}): Vocab {
     romaji: "taberu",
     english: "to eat",
     tips: "खाणे",
+    sentence: "毎朝ご飯を食べる。",
     category: "verb",
     created_at: iso(T - 5 * DAY),
     // word track: a mature, future-due card

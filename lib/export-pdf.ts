@@ -17,6 +17,7 @@ const WEIGHTS: Record<string, number> = {
   romaji: 1.4,
   english: 2.4,
   tips: 2.4,
+  sentence: 2.8,
   category: 1.0,
 };
 

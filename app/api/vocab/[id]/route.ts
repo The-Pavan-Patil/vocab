@@ -39,7 +39,14 @@ export async function PATCH(request: Request, { params }: Params) {
   }
 
   const update: Record<string, string | boolean | string[] | null> = {};
-  for (const key of ["kanji", "romaji", "english", "tips", "category"] as const) {
+  for (const key of [
+    "kanji",
+    "romaji",
+    "english",
+    "tips",
+    "sentence",
+    "category",
+  ] as const) {
     if (key in body) {
       const val = body[key]?.toString().trim() ?? "";
       update[key] = key === "kanji" ? val : val || null;

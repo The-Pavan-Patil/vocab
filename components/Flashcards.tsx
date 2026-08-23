@@ -13,6 +13,7 @@ import {
   Clock,
   Layers,
   Lightbulb,
+  Pencil,
   RotateCcw,
   Sparkles,
   X,
@@ -33,6 +34,8 @@ import { cn } from "@/lib/utils";
 import { reviewVocab } from "@/lib/api";
 import { createReviewId } from "@/lib/review-command";
 import { useReviewOutbox } from "@/hooks/use-review-outbox";
+import EditVocabDialog from "@/components/EditVocabDialog";
+import SentenceNote from "@/components/SentenceNote";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Spinner } from "@/components/ui/spinner";
@@ -62,6 +65,13 @@ import {
 const byCategory = (list: Vocab[], cat: string) =>
   cat === "all" ? list : list.filter((v) => v.category === cat);
 
+// Same words, possibly different content — see the session rebuild below.
+function sameCards(a: Vocab[], b: Vocab[]): boolean {
+  if (a.length !== b.length) return false;
+  const ids = new Set(a.map((item) => item.id));
+  return b.every((item) => ids.has(item.id));
+}
+
 type VocabReviewCommand = {
   reviewId: string;
   cardId: string;
@@ -87,9 +97,13 @@ function humanizeUntil(ms: number): string {
 export default function Flashcards({
   vocab,
   mode = "word",
+  onVocabChanged,
 }: {
   vocab: Vocab[];
   mode?: StudyMode;
+  // Told about a word edited from inside a session, so the rest of the app can
+  // catch up without this component reloading (and restarting the session).
+  onVocabChanged?: (updated: Vocab) => void;
 }) {
   const isKanji = mode === "kanji";
   const [category, setCategory] = useState<string>("all");
@@ -123,6 +137,8 @@ export default function Flashcards({
   const [lapsedIds, setLapsedIds] = useState<Set<string>>(() => new Set());
   const [flipped, setFlipped] = useState(false);
   const [showHint, setShowHint] = useState(false);
+  // The card currently open in the edit dialog (null = closed).
+  const [editing, setEditing] = useState<Vocab | null>(null);
   const interactionHandledRef = useRef(false);
 
   const sendReview = useCallback(
@@ -176,25 +192,35 @@ export default function Flashcards({
     setNewLimit(parsed);
   }, [mode]);
 
-  // (Re)build the session whenever the source list, category, session id, or
-  // chosen size changes. New identity on any dep change → triggers the
-  // render-time reset below (the repo's "you might not need an effect" pattern).
+  // (Re)build the session whenever the category, session id, or chosen size
+  // changes. New identity on any dep change → triggers the render-time reset
+  // below (the repo's "you might not need an effect" pattern).
   const sessionToken = useMemo(
     () => ({}),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [vocab, category, sessionId, newLimit]
+    [category, sessionId, newLimit]
   );
   const [prevToken, setPrevToken] = useState(sessionToken);
-  if (prevToken !== sessionToken) {
+  const vocabChanged = prevVocab !== vocab;
+  // A new list carrying the SAME cards is an edit, not a new deck — someone
+  // fixed a word (maybe the card on screen) from the edit dialog. Swapping the
+  // card objects into the live queue keeps the queue order, the progress bar,
+  // and the reviewed/lapsed tallies; only a membership change (a word added or
+  // deleted elsewhere) is worth restarting the session over.
+  const editedInPlace = vocabChanged && sameCards(prevVocab, vocab);
+  if (vocabChanged) {
+    setPrevVocab(vocab);
+    setCards(vocab);
+    if (editedInPlace) {
+      const byId = new Map(vocab.map((item) => [item.id, item]));
+      setRemaining((queue) => queue.map((item) => byId.get(item.id) ?? item));
+    }
+  }
+  if (prevToken !== sessionToken || (vocabChanged && !editedInPlace)) {
     setPrevToken(sessionToken);
-    const vocabChanged = prevVocab !== vocab;
     // When the parent reloads its list, resync our working copy and study the
     // fresh data; otherwise keep our locally-updated schedules.
     const source = vocabChanged ? vocab : cards;
-    if (vocabChanged) {
-      setPrevVocab(vocab);
-      setCards(vocab);
-    }
     // A parent reload always restudies the fresh due data (never a cram);
     // restart() sets `cram` to re-include cards we just scheduled ahead.
     const nextQueue = buildSession(byCategory(source, category), now, {
@@ -323,6 +349,7 @@ export default function Flashcards({
       if (
         remaining.length === 0 ||
         reviewBlocked ||
+        editing !== null || // the edit dialog owns the keyboard while it's open
         interactionHandledRef.current
       )
         return;
@@ -354,7 +381,7 @@ export default function Flashcards({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [flipped, remaining, reviewBlocked]);
+  }, [flipped, remaining, reviewBlocked, editing]);
 
   if (vocab.length === 0) {
     return (
@@ -544,6 +571,9 @@ export default function Flashcards({
                         </span>
                       </div>
                     )}
+                    {/* The word in context, last on the answer — you read the
+                        meaning first, then see it used. */}
+                    <SentenceNote sentence={card.sentence} />
                   </div>
                   <div className="jp shrink-0 truncate text-xs tracking-wide text-muted-foreground/60 uppercase">
                     {card.kanji}
@@ -649,6 +679,15 @@ export default function Flashcards({
             <Button
               variant="ghost"
               size="icon-lg"
+              onClick={() => setEditing(card)}
+              disabled={reviewBlocked}
+              aria-label={`Edit ${card.kanji}`}
+            >
+              <Pencil aria-hidden />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-lg"
               onClick={() => setShowHint((s) => !s)}
               disabled={reviewBlocked}
               aria-pressed={showHint}
@@ -671,6 +710,23 @@ export default function Flashcards({
           )}
         </>
       )}
+
+      {/* Fix a word without leaving the session: the saved row is swapped into
+          the live queue, so the card on screen updates in place. */}
+      <EditVocabDialog
+        word={editing}
+        onClose={() => setEditing(null)}
+        onSaved={(updated) => {
+          const projected = deckCard(updated, mode);
+          setCards((current) =>
+            current.map((item) => (item.id === projected.id ? projected : item))
+          );
+          setRemaining((queue) =>
+            queue.map((item) => (item.id === projected.id ? projected : item))
+          );
+          onVocabChanged?.(updated);
+        }}
+      />
     </div>
   );
 }

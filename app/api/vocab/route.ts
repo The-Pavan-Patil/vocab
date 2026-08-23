@@ -35,6 +35,7 @@ function sanitize(
     romaji: v.romaji?.toString().trim() || null,
     english: v.english?.toString().trim() || null,
     tips: v.tips?.toString().trim() || null,
+    sentence: v.sentence?.toString().trim() || null,
     category: v.category?.toString().trim() || null,
     study_as_kanji: studyAsKanji, // also drill as a kanji-only card
   };

@@ -20,6 +20,7 @@ export function entryToVocabInput(entry: DictEntry): VocabInput {
     romaji: entry.romaji,
     english,
     tips: "",
+    sentence: "",
     category,
   };
 }
