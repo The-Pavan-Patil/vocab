@@ -30,6 +30,7 @@ export type DesiredKanjiCard = {
   jlpt: number | null;
   word: string;
   word_meaning: string | null;
+  word_sentence: string | null;
   reading?: string | null;
   word_reading?: string | null;
   word_prompt_parts?: KanjiPromptPart[] | null;
@@ -152,6 +153,7 @@ export async function buildDesiredKanjiCards(
         jlpt: info.jlpt,
         word: word.kanji,
         word_meaning: word.english,
+        word_sentence: word.sentence,
       };
       if (segments) {
         row.reading = readings?.get(character) ?? null;

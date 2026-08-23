@@ -331,7 +331,11 @@ export default function ImportPanel({
                             </Select>
                           ) : (
                             <Input
-                              className={c.key === "kanji" ? "jp" : undefined}
+                              className={
+                                c.key === "kanji" || c.key === "sentence"
+                                  ? "jp"
+                                  : undefined
+                              }
                               value={(r[c.key] as string) ?? ""}
                               onChange={(e) => editCell(i, c.key, e.target.value)}
                             />

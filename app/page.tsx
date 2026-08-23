@@ -69,6 +69,15 @@ export default function Home() {
     [vocab]
   );
 
+  // A word edited from inside a study session. Patching the one row (instead of
+  // refetching) keeps every deck's in-progress session intact — Flashcards
+  // swaps the card in place when the list's membership hasn't changed.
+  const applyVocabUpdate = useCallback((updated: Vocab) => {
+    setVocab((current) =>
+      current.map((word) => (word.id === updated.id ? updated : word))
+    );
+  }, []);
+
   const revealWordInList = useCallback((word: string) => {
     setListReveal((current) => ({
       word,
@@ -150,17 +159,26 @@ export default function Home() {
         </TabsContent>
         <TabsContent value="flashcards" forceMount>
           <Activity mode={tab === "flashcards" ? "visible" : "hidden"}>
-            <Flashcards vocab={vocab} />
+            <Flashcards vocab={vocab} onVocabChanged={applyVocabUpdate} />
           </Activity>
         </TabsContent>
         <TabsContent value="kanji" forceMount>
           <Activity mode={tab === "kanji" ? "visible" : "hidden"}>
-            <KanjiTab kanjiVocab={kanjiVocab} active={tab === "kanji"} />
+            <KanjiTab
+              vocab={vocab}
+              kanjiVocab={kanjiVocab}
+              active={tab === "kanji"}
+              onVocabChanged={applyVocabUpdate}
+            />
           </Activity>
         </TabsContent>
         <TabsContent value="smart-kanji" forceMount>
           <Activity mode={tab === "smart-kanji" ? "visible" : "hidden"}>
-            <SmartKanjiDeck active={tab === "smart-kanji"} />
+            <SmartKanjiDeck
+              active={tab === "smart-kanji"}
+              vocab={vocab}
+              onVocabChanged={applyVocabUpdate}
+            />
           </Activity>
         </TabsContent>
         <TabsContent value="list" forceMount>

@@ -4,6 +4,7 @@ export type Vocab = {
   romaji: string | null;
   english: string | null;
   tips: string | null; // Marathi meaning / mnemonic
+  sentence: string | null; // example sentence using this word (migration 0011)
   category: string | null;
   created_at: string;
   // Spaced-repetition state (see lib/srs.ts + docs/spaced-repetition.md).
@@ -41,6 +42,7 @@ export type VocabInput = {
   romaji?: string | null;
   english?: string | null;
   tips?: string | null;
+  sentence?: string | null;
   category?: string | null;
   study_as_kanji?: boolean; // also drill this word as a kanji-only card
   // Chosen kanji to study as smart cards; omitted/null = all JLPT-graded kanji.
@@ -65,6 +67,7 @@ export const COLUMNS: { key: keyof VocabInput; label: string }[] = [
   { key: "romaji", label: "Romaji" },
   { key: "english", label: "English Meaning" },
   { key: "tips", label: "Tips (Marathi)" },
+  { key: "sentence", label: "Sentence" },
   { key: "category", label: "Category" },
 ];
 
@@ -146,6 +149,7 @@ export type KanjiCard = {
   word_reading: string | null; // full word reading, e.g. たべる
   word_prompt_parts: KanjiPromptPart[] | null;
   word_meaning: string | null;
+  word_sentence: string | null; // the word's example sentence (migration 0011)
   vocab_id: string;
   active: boolean;
   created_at: string;

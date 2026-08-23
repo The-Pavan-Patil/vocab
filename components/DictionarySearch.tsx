@@ -16,6 +16,7 @@ import KanjiBreakdown from "@/components/KanjiBreakdown";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -154,6 +155,7 @@ export default function DictionarySearch({
             romaji: existing.romaji ?? dictionaryDraft.romaji,
             english: existing.english ?? dictionaryDraft.english,
             tips: existing.tips ?? dictionaryDraft.tips,
+            sentence: existing.sentence ?? dictionaryDraft.sentence,
             category: existing.category ?? dictionaryDraft.category,
             study_as_kanji: existing.study_as_kanji ?? false,
             kanji_selection: savedSelection,
@@ -457,6 +459,20 @@ export default function DictionarySearch({
                     onChange={(e) => setField("tips", e.target.value)}
                     placeholder="खाणे"
                   />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="d-sentence">Sentence</FieldLabel>
+                  <Textarea
+                    id="d-sentence"
+                    className="jp"
+                    rows={2}
+                    value={draft.sentence ?? ""}
+                    onChange={(e) => setField("sentence", e.target.value)}
+                    placeholder="例: 毎朝ご飯を食べる。"
+                  />
+                  <FieldDescription>
+                    Shown on the back of this word’s flashcards.
+                  </FieldDescription>
                 </Field>
                 <Field>
                   <FieldLabel htmlFor="d-category">Category</FieldLabel>

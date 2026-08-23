@@ -8,9 +8,18 @@ import {
   useRef,
   useState,
 } from "react";
-import { Check, Clock, Languages, Loader2, RotateCcw, Sparkles, X } from "lucide-react";
+import {
+  Check,
+  Clock,
+  Languages,
+  Loader2,
+  Pencil,
+  RotateCcw,
+  Sparkles,
+  X,
+} from "lucide-react";
 import { toRomaji } from "wanakana";
-import type { KanjiCard, KanjiInfo, KanjiPromptPart } from "@/lib/types";
+import type { KanjiCard, KanjiInfo, KanjiPromptPart, Vocab } from "@/lib/types";
 import {
   NEW_CARDS_PER_SESSION,
   RELEARN_GAP,
@@ -33,6 +42,8 @@ import { createReviewId } from "@/lib/review-command";
 import { promptTextSize, readingTextSize } from "@/lib/card-fit";
 import { cn } from "@/lib/utils";
 import { useReviewOutbox } from "@/hooks/use-review-outbox";
+import EditVocabDialog from "@/components/EditVocabDialog";
+import SentenceNote from "@/components/SentenceNote";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
@@ -196,9 +207,15 @@ function compactReadings(readings: string[]): string {
 export default function SmartKanjiDeck({
   active = true,
   variant = "smart",
+  vocab = [],
+  onVocabChanged,
 }: {
   active?: boolean;
   variant?: "smart" | "all";
+  // The user's words, so a card can be traced back to the row it came from and
+  // edited in place. Without them the edit affordance is simply not offered.
+  vocab?: Vocab[];
+  onVocabChanged?: (updated: Vocab) => void;
 }) {
   // "all" = the ungated "All Kanjis" review: every card, no JLPT/due filter,
   // newest word first, grouped so the same kanji's words run consecutively.
@@ -217,6 +234,8 @@ export default function SmartKanjiDeck({
   const [flipped, setFlipped] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<Record<string, KanjiInfo>>({});
+  // The source word of the card being edited (null = dialog closed).
+  const [editing, setEditing] = useState<Vocab | null>(null);
 
   // Refs let async refreshes reconcile the latest cache/queue without making
   // either one a dependency that implicitly restarts the current session.
@@ -356,6 +375,12 @@ export default function SmartKanjiDeck({
   }, [active, preferencesReady, isAll]);
 
   const card = remaining[0];
+  // Smart cards are projections of a word, so editing one means editing its
+  // source row. A card whose word is missing from `vocab` (not loaded, or the
+  // deck rendered without it) simply gets no edit button.
+  const cardWord = card
+    ? (vocab.find((word) => word.id === card.vocab_id) ?? null)
+    : null;
   const reviewedCount = reviewedIds.size;
   const done = sessionTotal - remaining.length;
   const currentWordKanji = useMemo(
@@ -411,6 +436,21 @@ export default function SmartKanjiDeck({
     startSession(cardsRef.current, { cram: true });
   }
 
+  // Editing a word re-syncs its kanji cards server-side, so pull the refreshed
+  // faces (meaning, sentence, readings) into the live queue. Membership is
+  // preserved — a card deselected by the edit drops out, everything else keeps
+  // its place and the session keeps its progress.
+  async function refreshAfterEdit() {
+    try {
+      const cards = await fetchKanjiCards();
+      cardsRef.current = cards;
+      setAllCards(cards);
+      setQueue(refreshQueuedKanjiCards(remainingRef.current, cards));
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
   function grade(g: "remember" | "right" | "wrong") {
     const cur = remaining[0];
     if (!cur || reviewBlocked || interactionHandledRef.current) return;
@@ -449,6 +489,7 @@ export default function SmartKanjiDeck({
       if (
         remaining.length === 0 ||
         reviewBlocked ||
+        editing !== null || // the edit dialog owns the keyboard while it's open
         interactionHandledRef.current
       )
         return;
@@ -476,7 +517,7 @@ export default function SmartKanjiDeck({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [flipped, remaining, reviewBlocked]);
+  }, [flipped, remaining, reviewBlocked, editing]);
 
   if (loading) {
     return (
@@ -700,6 +741,7 @@ export default function SmartKanjiDeck({
                     <div className="text-sm leading-snug break-words sm:text-base">
                       {card.word_meaning || "—"}
                     </div>
+                    <SentenceNote sentence={card.word_sentence} />
                     <div className="grid gap-2">
                       {currentWordKanji.map((character) => {
                         const kanjiInfo = info[character];
@@ -777,8 +819,32 @@ export default function SmartKanjiDeck({
               {remaining.length} left{isAll ? "" : ` · ${levelLabel(level)}`}
             </span>
           </div>
+
+          {cardWord && (
+            <div className="flex items-center justify-center">
+              <Button
+                variant="ghost"
+                size="icon-lg"
+                onClick={() => setEditing(cardWord)}
+                disabled={reviewBlocked}
+                aria-label={`Edit ${cardWord.kanji}`}
+              >
+                <Pencil aria-hidden />
+              </Button>
+            </div>
+          )}
         </>
       )}
+
+      {/* Fix the source word without leaving the session. */}
+      <EditVocabDialog
+        word={editing}
+        onClose={() => setEditing(null)}
+        onSaved={(updated) => {
+          onVocabChanged?.(updated);
+          void refreshAfterEdit();
+        }}
+      />
     </div>
   );
 }

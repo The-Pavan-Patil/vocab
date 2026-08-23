@@ -142,6 +142,7 @@ test("reconciliation updates, activates, creates, and deactivates without deleti
       jlpt: 5,
       word: row.character,
       word_meaning: null,
+      word_sentence: null,
     })
   );
   const plan = planKanjiReconciliation(

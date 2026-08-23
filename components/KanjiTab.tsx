@@ -14,11 +14,17 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 // the hidden one has its effects torn down, and the All-Kanjis deck only loads
 // while it's the visible view.
 export default function KanjiTab({
+  vocab,
   kanjiVocab,
   active,
+  onVocabChanged,
 }: {
+  // The full word list — the All-Kanjis deck resolves a card's source row from
+  // it so the word can be edited mid-session.
+  vocab: Vocab[];
   kanjiVocab: Vocab[];
   active: boolean;
+  onVocabChanged?: (updated: Vocab) => void;
 }) {
   const [view, setView] = useState<"word" | "all">("word");
 
@@ -38,10 +44,19 @@ export default function KanjiTab({
       </div>
 
       <Activity mode={view === "word" ? "visible" : "hidden"}>
-        <Flashcards vocab={kanjiVocab} mode="kanji" />
+        <Flashcards
+          vocab={kanjiVocab}
+          mode="kanji"
+          onVocabChanged={onVocabChanged}
+        />
       </Activity>
       <Activity mode={view === "all" ? "visible" : "hidden"}>
-        <SmartKanjiDeck variant="all" active={active && view === "all"} />
+        <SmartKanjiDeck
+          variant="all"
+          active={active && view === "all"}
+          vocab={vocab}
+          onVocabChanged={onVocabChanged}
+        />
       </Activity>
     </div>
   );
