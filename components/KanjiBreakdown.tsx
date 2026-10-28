@@ -1,12 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Loader2 } from "lucide-react";
 import { fetchKanji } from "@/lib/api";
 import { kanjiChars } from "@/lib/kanji-deck";
 import type { KanjiInfo } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
+import { Spinner } from "@/components/ui/spinner";
 import {
   FieldDescription,
   FieldLegend,
@@ -15,9 +15,17 @@ import {
 
 // Undefined = not yet requested/loaded, present (even as null) = settled.
 
-// A single kanji's JLPT level as a compact badge: 5=N5 … 1=N1, null = ungraded.
-function jlptBadge(jlpt: number | null | undefined): string {
-  return jlpt == null ? "—" : `N${jlpt}`;
+// A single kanji's JLPT level as a compact badge (5=N5 … 1=N1) plus what a
+// screen reader should say for it. `info` null = the lookup failed, which is
+// not the same as an ungraded kanji — so it's spelled out, not a bare "?"
+// explained only by a hover tooltip.
+function jlptBadge(info: KanjiInfo | null | undefined): {
+  text: string;
+  spoken: string;
+} {
+  if (info === null) return { text: "Level unknown", spoken: "level unknown" };
+  if (info?.jlpt == null) return { text: "—", spoken: "ungraded" };
+  return { text: `N${info.jlpt}`, spoken: `JLPT N${info.jlpt}` };
 }
 
 // Per-kanji study picker shown when a word is being added "as kanji". Lists each
@@ -111,25 +119,33 @@ export default function KanjiBreakdown({
       <ul className="flex flex-col gap-1">
         {chars.map((ch) => {
           const loaded = ch in info;
+          const level = jlptBadge(info[ch]);
           return (
-            <li key={ch} className="flex items-center gap-3 px-1 py-1">
-              <span className="jp text-2xl leading-none">{ch}</span>
-              {loaded ? (
-                <Badge variant="secondary" className="font-normal">
-                  {jlptBadge(info[ch]?.jlpt)}
-                </Badge>
-              ) : (
-                <Loader2
-                  className="size-3.5 animate-spin text-muted-foreground"
-                  aria-label="Loading level"
+            <li key={ch}>
+              {/* The whole row is the hit target: clicking the kanji or its
+                  level toggles the switch too. */}
+              <label className="flex cursor-pointer items-center gap-3 rounded-md px-1 py-1 hover:bg-muted/60">
+                <span lang="ja" translate="no" className="jp text-2xl leading-none">
+                  {ch}
+                </span>
+                {loaded ? (
+                  <Badge variant="secondary" className="font-normal">
+                    {level.text}
+                  </Badge>
+                ) : (
+                  <Spinner className="size-3.5 text-muted-foreground" aria-label="Loading level" />
+                )}
+                {/* With the default selection the switch follows the level, so
+                    hold it until that's in rather than showing "off" and then
+                    flipping on by itself. A saved selection is known up front. */}
+                <Switch
+                  className="ml-auto"
+                  checked={isOn(ch)}
+                  disabled={!loaded && initialSelectionSet === null}
+                  onCheckedChange={(v) => setOverrides((o) => ({ ...o, [ch]: v }))}
+                  aria-label={`Study ${ch}${loaded ? `, ${level.spoken}` : ""}`}
                 />
-              )}
-              <Switch
-                className="ml-auto"
-                checked={isOn(ch)}
-                onCheckedChange={(v) => setOverrides((o) => ({ ...o, [ch]: v }))}
-                aria-label={`Study ${ch}`}
-              />
+              </label>
             </li>
           );
         })}

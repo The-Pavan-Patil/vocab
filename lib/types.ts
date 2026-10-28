@@ -61,6 +61,11 @@ export const CATEGORIES = [
 
 export type Category = (typeof CATEGORIES)[number];
 
+// Where the page's word list stands, so a tab can tell "no words yet" from
+// "still loading" and "couldn't load" (the page's alert covers that one) —
+// all three arrive as an empty `vocab` array.
+export type VocabLoadState = "loading" | "failed" | "ready";
+
 // The canonical column order used for export (.docx / .pdf) and import preview.
 export const COLUMNS: { key: keyof VocabInput; label: string }[] = [
   { key: "kanji", label: "Kanji" },
@@ -131,7 +136,7 @@ export type KanjiInfo = {
   words: KanjiWord[]; // example words that use this kanji
 };
 
-// Ordered display metadata for the All Kanjis prompt. A non-null reading is a
+// Ordered display metadata for the All Kanji prompt. A non-null reading is a
 // safe furigana hint for a segment whose kanji were all turned off in the
 // per-word study selection.
 export type KanjiPromptPart = {

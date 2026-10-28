@@ -8,8 +8,8 @@
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --font-sans: var(--font-sans);
-  --font-mono: var(--font-geist-mono);
   --font-jp: var(--font-jp);
+  --color-data: var(--data);
   --font-heading: var(--font-sans);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
@@ -50,48 +50,111 @@
 }
 
 /*
- * Warm, low-eye-strain palette for long study sessions.
- * Paper-like warm background, soft charcoal text (not pure black),
- * and a calm muted teal/sage accent. Light theme only.
+ * Warm, low-eye-strain palette for long study sessions. Light theme only.
+ *
+ * "Achromatic ledger" (2026-10-27 design pass): the chrome is ink on stone —
+ * no colour on navigation, buttons or panels — so the one hue, the calm
+ * teal, is left for the study itself: session progress and the kanji being
+ * tested (--data). The ground is a low-chroma stone (washi rather than
+ * cream) and carries all the warmth; cards are pure white one tone step
+ * above it; every grey that carries words holds 4.5:1 on both.
  */
 :root {
-  --background: oklch(0.985 0.004 83); /* warm paper */
+  --background: oklch(0.97 0.003 85); /* stone ground, #f6f5f3 */
   --foreground: oklch(0.355 0.006 75); /* soft charcoal */
-  --card: oklch(0.997 0.002 83); /* gentle warm white */
+  --card: oklch(1 0 0); /* white, one step above the ground */
   --card-foreground: oklch(0.355 0.006 75);
-  --popover: oklch(0.997 0.002 83);
+  --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.355 0.006 75);
-  --primary: oklch(0.52 0.058 172); /* muted teal/sage */
-  --primary-foreground: oklch(0.99 0.005 90);
-  --secondary: oklch(0.95 0.006 83); /* warm neutral */
-  --secondary-foreground: oklch(0.4 0.006 75);
-  --muted: oklch(0.955 0.005 83);
-  --muted-foreground: oklch(0.55 0.012 75); /* soft secondary text */
-  --accent: oklch(0.935 0.022 168); /* faint sage tint */
-  --accent-foreground: oklch(0.42 0.04 172);
+  --primary: oklch(0.31 0.007 80); /* sumi ink: the one filled action */
+  --primary-foreground: oklch(1 0 0);
+  --secondary: oklch(0.931 0.004 85); /* grey pill: the secondary action */
+  --secondary-foreground: oklch(0.355 0.006 75);
+  --muted: oklch(0.949 0.004 85); /* raised tone: active nav, wells */
+  --muted-foreground: oklch(0.505 0.0125 77); /* ≥5.2:1 on ground and card */
+  --accent: oklch(0.931 0.004 85); /* hover / highlight — neutral */
+  --accent-foreground: oklch(0.355 0.006 75);
   --destructive: oklch(0.55 0.13 28); /* softened brick red */
-  --border: oklch(0.905 0.006 80);
-  --input: oklch(0.905 0.006 80);
-  --ring: oklch(0.62 0.05 172);
+  --border: oklch(0.919 0.0055 85); /* card and table edges */
+  --input: oklch(0.868 0.0075 81); /* controls, one step stronger */
+  --ring: oklch(0.52 0.058 172); /* focus: teal, 4.9:1 on the ground */
+  --data: oklch(0.52 0.058 172); /* the one hue: study progress */
   --chart-1: oklch(0.62 0.06 172);
   --chart-2: oklch(0.58 0.05 200);
   --chart-3: oklch(0.6 0.05 140);
   --chart-4: oklch(0.68 0.06 90);
   --chart-5: oklch(0.6 0.07 50);
-  --radius: 0.75rem;
-  --sidebar: oklch(0.985 0.004 83);
+  /* Tight radii — an index card, not a pill: controls (rounded-lg) ≈6px and
+     cards (rounded-xl) ≈8px at the desktop root size. */
+  --radius: 0.3rem;
+  --sidebar: oklch(0.97 0.003 85);
   --sidebar-foreground: oklch(0.355 0.006 75);
-  --sidebar-primary: oklch(0.52 0.058 172);
-  --sidebar-primary-foreground: oklch(0.99 0.005 90);
-  --sidebar-accent: oklch(0.935 0.022 168);
-  --sidebar-accent-foreground: oklch(0.42 0.04 172);
-  --sidebar-border: oklch(0.905 0.006 80);
-  --sidebar-ring: oklch(0.62 0.05 172);
+  --sidebar-primary: oklch(0.31 0.007 80);
+  --sidebar-primary-foreground: oklch(1 0 0);
+  --sidebar-accent: oklch(0.931 0.004 85);
+  --sidebar-accent-foreground: oklch(0.355 0.006 75);
+  --sidebar-border: oklch(0.919 0.0055 85);
+  --sidebar-ring: oklch(0.52 0.058 172);
+  /* Height of the fixed bottom nav (app/page.tsx), so overlays such as toasts
+     can sit above it. 0 where the nav is hidden (lg and up). */
+  --app-nav-clearance: 0px;
+  /* Room for the sticky top bar, which only exists below lg (desktop has
+     the sidebar instead). */
+  --app-header-clearance: 1rem;
+}
+/* Same breakpoint as the nav's `lg:hidden` (64rem — media-query rem follows
+   the browser's text size, not the html font-size, just like Tailwind's). */
+@media (width < 64rem) {
+  :root {
+    --app-nav-clearance: calc(4rem + env(safe-area-inset-bottom));
+    --app-header-clearance: 5rem;
+  }
 }
 
 @layer base {
+  /* Solid ring colour (≈3.4:1 on the paper background) for any native focus
+     outline — the /50 tint it replaced fell to ≈1.7:1. */
   * {
-    @apply border-border outline-ring/50;
+    @apply border-border outline-ring;
+  }
+  /* Plain links (login, reset password) have no focus style of their own: give
+     them a clear ring, offset off the text. */
+  a:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+  html {
+    color-scheme: light;
+    /* Anchors and focused elements stop below the sticky app header and above
+       the fixed mobile bottom nav. */
+    scroll-padding-top: var(--app-header-clearance);
+    scroll-padding-bottom: var(--app-nav-clearance);
+    /* An intentional, on-palette tap flash instead of the browser's grey. */
+    -webkit-tap-highlight-color: oklch(0.31 0.007 80 / 0.08);
+  }
+  /* No double-tap-to-zoom delay on anything you tap — the study cards and
+     grade buttons are tapped in quick succession. Pinch zoom still works. */
+  a,
+  button,
+  label,
+  summary,
+  [role="button"],
+  [role="switch"],
+  [role="tab"] {
+    touch-action: manipulation;
+  }
+  /* Respect "reduce motion": the dialog/select zoom-fades (tw-animate-css),
+     spinners and transitions finish instantly instead of animating. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    ::before,
+    ::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
   }
   body {
     @apply bg-background text-foreground;
@@ -105,19 +168,21 @@
    * font-size enlarges text, control heights, padding, gaps, icons and radius
    * together — biggest on desktop, generous on tablet, comfortable on mobile.
    * (Do NOT also change --spacing / --radius; that would double-scale.)
+   * Percentages, not px, so the person's browser text-size setting still
+   * scales everything: at the default 16px these are 17 / 19 / 20px.
    */
   html {
     @apply font-sans;
-    font-size: 17px; /* mobile: optimized, no overflow */
+    font-size: 106.25%; /* mobile: optimized, no overflow */
   }
   @media (min-width: 768px) {
     html {
-      font-size: 19px; /* tablet: generous */
+      font-size: 118.75%; /* tablet: generous */
     }
   }
   @media (min-width: 1024px) {
     html {
-      font-size: 20px; /* desktop / large: biggest (~+25%) */
+      font-size: 125%; /* desktop / large: biggest (~+25%) */
     }
   }
   /* Japanese glyphs render with the self-hosted Noto Sans JP. */
@@ -126,7 +191,7 @@
     font-feature-settings: "palt";
   }
   /*
-   * The study cards (Flashcards, Word Kanji, All Kanjis) are a fixed stage:
+   * The study cards (Flashcards, Word Kanji, All Kanji) are a fixed stage:
    * content fits into the card, never the reverse. Plain CSS rather than a
    * height utility so the size can't depend on class generation, and min/max
    * pin it against any flex or grid parent that would stretch or shrink it.
@@ -157,8 +222,25 @@
     ruby-position: under;
   }
   .furigana-under rt {
-    font-size: 0.42em;
+    /* Floored so long words, whose prompt steps down to text-xl on phones,
+       don't push the reading under ~11px. */
+    font-size: max(0.42em, 0.6875rem);
     line-height: 1.1;
+  }
+  /* The native clear (×) in search boxes comes in the platform's blue — the
+     only blue on the page. Redrawn as a grey × in the text colour. */
+  input[type="search"]::-webkit-search-cancel-button {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 0.9em;
+    height: 0.9em;
+    background-color: currentColor;
+    opacity: 0.55;
+    cursor: pointer;
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round'%3E%3Cpath d='M18 6 6 18M6 6l12 12'/%3E%3C/svg%3E")
+      center / contain no-repeat;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round'%3E%3Cpath d='M18 6 6 18M6 6l12 12'/%3E%3C/svg%3E")
+      center / contain no-repeat;
   }
   /* The Sonner toast renders in a portal and doesn't inherit the root scale;
      re-couple it with a rem font-size so it matches the larger UI. */

@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Spinner } from "@/components/ui/spinner";
 import {
   Card,
   CardContent,
@@ -12,7 +13,13 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
+import {
+  Field,
+  FieldDescription,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+} from "@/components/ui/field";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 // Where the recovery email link lands (via /auth/callback). The callback exchanges
@@ -23,6 +30,19 @@ export default function ResetPasswordPage() {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
+  // Inline errors: the confirmation doesn't match, or the update failed.
+  const [mismatch, setMismatch] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const passwordRef = useRef<HTMLInputElement>(null);
+  const confirmRef = useRef<HTMLInputElement>(null);
+
+  // The fields are disabled until the recovery link is verified, so focus the
+  // first one once they're usable (autoFocus on a disabled input does nothing).
+  useEffect(() => {
+    if (ready && window.matchMedia("(pointer: fine)").matches) {
+      passwordRef.current?.focus();
+    }
+  }, [ready]);
 
   useEffect(() => {
     const supabase = createClient();
@@ -53,11 +73,13 @@ export default function ResetPasswordPage() {
     e.preventDefault();
     if (password.length < 6) return;
     if (password !== confirm) {
-      toast.error("Passwords don’t match");
+      setMismatch(true);
+      confirmRef.current?.focus();
       return;
     }
     const supabase = createClient();
     setBusy(true);
+    setFormError(null);
     try {
       const { error } = await supabase.auth.updateUser({ password });
       if (error) throw error;
@@ -66,10 +88,15 @@ export default function ResetPasswordPage() {
       });
       window.location.assign("/"); // full reload so the proxy re-evaluates
     } catch (err) {
-      toast.error("Couldn’t update password", {
-        description: (err as Error).message,
-      });
+      const message =
+        err instanceof TypeError
+          ? "You seem to be offline"
+          : (err as Error).message.replace(/\.$/, "");
+      setFormError(
+        `${message}. Try again, or go back to sign in and request a new reset link if this one has expired.`
+      );
       setBusy(false);
+      passwordRef.current?.focus();
     }
   }
 
@@ -78,10 +105,14 @@ export default function ResetPasswordPage() {
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
           <div className="mb-1 text-xl font-semibold tracking-tight">
-            <span className="jp">日本語</span>{" "}
+            <span lang="ja" translate="no" className="jp">日本語</span>{" "}
             <span className="text-muted-foreground font-normal">Vocab</span>
           </div>
-          <CardTitle>Set a new password</CardTitle>
+          <CardTitle>
+            <h1>
+              Set a new password
+            </h1>
+          </CardTitle>
           <CardDescription>
             Choose a new password for your account.
           </CardDescription>
@@ -93,7 +124,7 @@ export default function ResetPasswordPage() {
               <AlertDescription>
                 Please{" "}
                 <a
-                  className="font-medium text-primary hover:underline"
+                  className="font-medium text-primary underline underline-offset-4 hover:decoration-2"
                   href="/login"
                 >
                   go back to sign in
@@ -107,40 +138,66 @@ export default function ResetPasswordPage() {
                 <Field>
                   <FieldLabel htmlFor="password">New password</FieldLabel>
                   <Input
+                    ref={passwordRef}
                     id="password"
+                    name="password"
                     type="password"
                     autoComplete="new-password"
                     value={password}
-                    onChange={(e) => setPassword(e.target.value)}
+                    onChange={(e) => {
+                      setPassword(e.target.value);
+                      setMismatch(false);
+                    }}
                     placeholder="••••••••"
                     minLength={6}
+                    aria-describedby="new-password-hint"
                     required
-                    autoFocus
                     disabled={ready === null}
                   />
+                  <FieldDescription id="new-password-hint">
+                    At least 6 characters.
+                  </FieldDescription>
                 </Field>
-                <Field>
+                <Field data-invalid={mismatch || undefined}>
                   <FieldLabel htmlFor="confirm">Confirm password</FieldLabel>
                   <Input
+                    ref={confirmRef}
                     id="confirm"
+                    name="confirm"
                     type="password"
                     autoComplete="new-password"
                     value={confirm}
-                    onChange={(e) => setConfirm(e.target.value)}
+                    onChange={(e) => {
+                      setConfirm(e.target.value);
+                      setMismatch(false);
+                    }}
                     placeholder="••••••••"
                     minLength={6}
+                    aria-invalid={mismatch || undefined}
+                    aria-describedby={mismatch ? "confirm-error" : undefined}
                     required
                     disabled={ready === null}
                   />
+                  <FieldError id="confirm-error">
+                    {mismatch
+                      ? "The passwords don’t match. Type the same password in both fields."
+                      : undefined}
+                  </FieldError>
                 </Field>
+                {formError && (
+                  <Alert variant="destructive">
+                    <AlertDescription>{formError}</AlertDescription>
+                  </Alert>
+                )}
                 <Button
                   type="submit"
                   size="lg"
                   disabled={busy || ready !== true}
                   className="w-full"
                 >
+                  {busy && <Spinner data-icon="inline-start" aria-hidden />}
                   {busy
-                    ? "Please wait…"
+                    ? "Updating password…"
                     : ready === null
                       ? "Verifying link…"
                       : "Update password"}

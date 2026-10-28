@@ -1,6 +1,7 @@
 // The example sentence on the back of a study card. Sized down from the meaning
 // and set apart by a rule — it's supporting context, not the thing being
 // recalled. Shared by every deck so the answer face reads the same everywhere.
+// Spans only: it renders inside the study-card <button>.
 export default function SentenceNote({
   sentence,
 }: {
@@ -8,13 +9,13 @@ export default function SentenceNote({
 }) {
   if (!sentence?.trim()) return null;
   return (
-    <div className="w-full border-t border-border/60 pt-2 text-left">
-      <span className="mr-1.5 text-[0.625rem] tracking-wide text-muted-foreground/70 uppercase">
+    <span className="block w-full border-t border-border/60 pt-2 text-left">
+      <span className="mr-1.5 text-xs text-muted-foreground">
         Sentence
       </span>
-      <span className="jp text-sm leading-snug break-words sm:text-base">
+      <span lang="ja" translate="no" className="jp text-sm leading-snug break-words sm:text-base">
         {sentence}
       </span>
-    </div>
+    </span>
   );
 }

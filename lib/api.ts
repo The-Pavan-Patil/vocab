@@ -185,6 +185,14 @@ export async function importFile(file: File): Promise<VocabInput[]> {
   return json.rows as VocabInput[];
 }
 
+// The whole list as a Word or PDF file. Fetched (not a plain link) so a server
+// error shows as a toast instead of replacing the app with a JSON page.
+export async function exportList(format: "docx" | "pdf"): Promise<Blob> {
+  const res = await fetch(`/api/export/${format}`, { cache: "no-store" });
+  if (!res.ok) ensureOk(res, await parseJson(res), "Export failed");
+  return res.blob();
+}
+
 // --- Dictionary (Takoboto-style search via Jisho/JMdict) ---
 
 export async function searchDictionary(q: string): Promise<DictEntry[]> {

@@ -151,7 +151,7 @@ test("AC9: kanjiChars extracts every kanji of a word", () => {
 });
 
 // ===========================================================================
-// "All Kanjis" review — grouping coverage (groupByKanji)
+// "All Kanji" review — grouping coverage (groupByKanji)
 // ===========================================================================
 
 const kc = (character: string, word: string) => ({ character, word });

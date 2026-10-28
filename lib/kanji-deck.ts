@@ -36,7 +36,7 @@ export function kanjiChars(text: string): string[] {
  * Cluster cards so every card sharing a `character` is consecutive, preserving
  * each character's first-appearance order in the input (stable within a group
  * too). Feeding a newest-first list therefore yields groups ordered by their
- * newest member, newest-first inside each group — the "All Kanjis" order.
+ * newest member, newest-first inside each group — the "All Kanji" order.
  */
 export function groupByKanji<T extends { character: string }>(cards: T[]): T[] {
   const groups = new Map<string, T[]>();

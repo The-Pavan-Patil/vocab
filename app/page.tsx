@@ -1,10 +1,24 @@
 "use client";
 
-import { Activity, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Activity,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { PencilLine, Layers, Languages, List, Sparkles, Upload, BookOpen } from "lucide-react";
 import { Tabs as TabsPrimitive } from "radix-ui";
 import { TabsContent } from "@/components/ui/tabs";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  Alert,
+  AlertAction,
+  AlertDescription,
+  AlertTitle,
+} from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import AddVocabForm from "@/components/AddVocabForm";
 import Flashcards from "@/components/Flashcards";
 import KanjiTab from "@/components/KanjiTab";
@@ -13,9 +27,15 @@ import VocabTable from "@/components/VocabTable";
 import ImportPanel from "@/components/ImportPanel";
 import DictionarySearch from "@/components/DictionarySearch";
 import AccountMenu from "@/components/AccountMenu";
+import { ScreenVisibleContext } from "@/components/ScreenHeader";
 import { fetchVocab } from "@/lib/api";
+import {
+  setSearchParams,
+  useHydrated,
+  useSearchParam,
+} from "@/hooks/use-search-param";
 import { deckCard } from "@/lib/decks";
-import type { Vocab } from "@/lib/types";
+import type { Vocab, VocabLoadState } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const TABS = [
@@ -25,36 +45,123 @@ const TABS = [
   { value: "kanji", label: "Kanji", short: "Kanji", icon: Languages },
   { value: "smart-kanji", label: "Smart Kanji", short: "Smart", icon: Sparkles },
   { value: "list", label: "List", short: "List", icon: List },
-  { value: "import", label: "Import", short: "Import", icon: Upload, iconOnlyNav: true },
+  { value: "import", label: "Import", short: "Import", icon: Upload },
 ];
 
+const DEFAULT_TAB = "dictionary";
+
+// Thousands grouping in the reader's locale ("1,240 words").
+const WORD_COUNT = new Intl.NumberFormat();
+
+// One tab's screen. forceMount leaves an inactive panel un-hidden and
+// focusable, so `hidden` is set by hand to take it out of the tab order and
+// the accessibility tree; <Activity> keeps its state while it's away; and
+// ScreenVisibleContext lets only the showing screen's title be the page's h1.
+function Panel({
+  value,
+  tab,
+  hydrated,
+  children,
+}: {
+  value: string;
+  tab: string;
+  hydrated: boolean;
+  children: React.ReactNode;
+}) {
+  const showing = tab === value;
+  return (
+    <TabsContent value={value} forceMount hidden={!hydrated || !showing}>
+      <ScreenVisibleContext value={hydrated && showing}>
+        <Activity mode={showing ? "visible" : "hidden"}>{children}</Activity>
+      </ScreenVisibleContext>
+    </TabsContent>
+  );
+}
+
+function Wordmark() {
+  return (
+    <p className="text-xl font-semibold tracking-tight whitespace-nowrap">
+      <span lang="ja" translate="no" className="jp">日本語</span>{" "}
+      <span className="font-normal text-muted-foreground">Vocab</span>
+    </p>
+  );
+}
+
 export default function Home() {
-  const [tab, setTab] = useState("dictionary");
+  // The active tab lives in the URL (?tab=list), so reload, Back/Forward and
+  // shared links all land on the same tab. Each switch is a history entry.
+  const tabParam = useSearchParam("tab");
+  const tab = TABS.some((t) => t.value === tabParam) ? tabParam! : DEFAULT_TAB;
+  // The URL can't be read on the server, so the prerendered HTML and the
+  // hydration pass don't know the tab yet. Show no panel until they do, rather
+  // than flashing Dictionary on a ?tab=list load.
+  const hydrated = useHydrated();
+  const setTab = useCallback((next: string) => {
+    setSearchParams({ tab: next === DEFAULT_TAB ? null : next }, { push: true });
+  }, []);
   const [vocab, setVocab] = useState<Vocab[]>([]);
+  // When `vocab` was fetched. A deck kept alive by <Activity> may have started
+  // its session hours ago; a reload rebuilds its queue against this clock so
+  // cards that came due in the meantime are included.
+  const [loadedAt, setLoadedAt] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState(false);
+  const mainRef = useRef<HTMLElement>(null);
   const [listReveal, setListReveal] = useState<{
     word: string;
     requestId: number;
   } | null>(null);
+  const loadState: VocabLoadState = loading
+    ? "loading"
+    : error && vocab.length === 0
+      ? "failed"
+      : "ready";
+  // The list's size, shown as the app's scope beside the wordmark.
+  const wordCount =
+    loadState === "loading"
+      ? "Loading…"
+      : loadState === "failed"
+        ? null
+        : `${WORD_COUNT.format(vocab.length)} ${vocab.length === 1 ? "word" : "words"}`;
 
+  // Refetch the list. The error alert (and its Retry button) stays up until a
+  // fetch succeeds, so a retry that fails again doesn't flash or drop focus.
   const reload = useCallback(async () => {
-    setError(null);
     try {
-      setVocab(await fetchVocab());
+      const data = await fetchVocab();
+      setVocab(data);
+      setLoadedAt(Date.now());
+      setError(null);
+      return true;
     } catch (e) {
       setError((e as Error).message);
+      return false;
     } finally {
       setLoading(false);
     }
   }, []);
+
+  async function retry() {
+    if (retrying) return;
+    setRetrying(true);
+    const ok = await reload();
+    setRetrying(false);
+    // The alert — and the focused Retry button — go away on success; hand
+    // focus to the content rather than letting it fall to <body>.
+    if (ok) mainRef.current?.focus({ preventScroll: true });
+  }
 
   // Initial load. Kept separate from `reload` so we don't call setState
   // synchronously inside the effect body.
   useEffect(() => {
     let active = true;
     fetchVocab()
-      .then((d) => active && setVocab(d))
+      .then((d) => {
+        if (!active) return;
+        setVocab(d);
+        setLoadedAt(Date.now());
+      })
       .catch((e) => active && setError((e as Error).message))
       .finally(() => active && setLoading(false));
     return () => {
@@ -84,153 +191,206 @@ export default function Home() {
       requestId: (current?.requestId ?? 0) + 1,
     }));
     setTab("list");
-  }, []);
+  }, [setTab]);
 
   return (
     <TabsPrimitive.Root
-      value={tab}
+      value={hydrated ? tab : ""}
       onValueChange={setTab}
-      className="flex min-h-full flex-col"
+      // Arrow keys move focus along the tabs; Enter/Space switches. Automatic
+      // activation would push a history entry for every tab passed over.
+      activationMode="manual"
+      orientation="vertical"
+      className="flex min-h-full flex-col lg:flex-row"
     >
-      {/* Navbar: brand · inline tab nav (desktop) · word count */}
-      <header className="sticky top-0 z-20 border-b border-border/70 bg-background/85 backdrop-blur">
-        <div className="mx-auto flex w-full max-w-5xl items-center gap-4 px-4 py-3 sm:px-6">
-          <h1 className="text-xl font-semibold tracking-tight whitespace-nowrap sm:text-2xl">
-            <span className="jp">日本語</span>{" "}
-            <span className="text-muted-foreground font-normal">Vocab</span>
-          </h1>
+      {/* Keyboard users can jump past the header and tab nav. */}
+      <a
+        href="#main"
+        className="sr-only rounded-md bg-background px-3 py-2 text-sm font-medium shadow-md ring-3 ring-ring/50 focus-visible:not-sr-only focus-visible:fixed focus-visible:top-2 focus-visible:left-2 focus-visible:z-50"
+      >
+        Skip to content
+      </a>
 
-          {/* Desktop / tablet: tabs live in the navbar itself. */}
-          <TabsPrimitive.List className="mx-auto hidden items-center gap-1 sm:flex">
-            {TABS.map((t) => (
-              <TabsPrimitive.Trigger
-                key={t.value}
-                value={t.value}
-                aria-label={t.iconOnlyNav ? t.label : undefined}
-                title={t.iconOnlyNav ? t.label : undefined}
-                className={cn(
-                  "inline-flex items-center gap-2 rounded-full py-2 text-sm font-medium text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 data-[state=active]:bg-primary/10 data-[state=active]:text-primary",
-                  t.iconOnlyNav ? "px-3" : "px-3.5"
-                )}
-              >
-                <t.icon className="size-4 shrink-0" aria-hidden />
-                {!t.iconOnlyNav && t.label}
-              </TabsPrimitive.Trigger>
-            ))}
-          </TabsPrimitive.List>
-
-          <p className="ml-auto text-sm whitespace-nowrap text-muted-foreground sm:ml-0">
-            {loading ? "Loading…" : `${vocab.length} words`}
-          </p>
-          <AccountMenu />
+      {/* Desktop: a labelled sidebar on the page ground, one hairline from
+          the canvas — the product and its scope at the top, the seven
+          sections, the account at the foot. Each screen names itself in its
+          own h1, so the brand here is a wordmark, not a heading. Below lg the
+          top bar and the bottom nav take over. */}
+      <aside className="sticky top-0 hidden h-svh w-48 shrink-0 flex-col gap-8 border-r border-border px-3 py-6 lg:flex">
+        <div className="px-2.5">
+          <Wordmark />
+          {wordCount && (
+            <p className="mt-0.5 text-sm text-muted-foreground tabular-nums">
+              {wordCount}
+            </p>
+          )}
         </div>
-      </header>
+        <TabsPrimitive.List aria-label="Sections" className="flex flex-col gap-0.5">
+          {TABS.map((t) => (
+            <TabsPrimitive.Trigger
+              key={t.value}
+              value={t.value}
+              className="flex h-8 items-center gap-2.5 rounded-md px-2.5 text-left text-sm whitespace-nowrap text-muted-foreground outline-hidden transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background data-[state=active]:bg-secondary data-[state=active]:font-medium data-[state=active]:text-foreground"
+            >
+              <t.icon className="size-4 shrink-0" aria-hidden />
+              {t.label}
+            </TabsPrimitive.Trigger>
+          ))}
+        </TabsPrimitive.List>
+        <div className="mt-auto">
+          <AccountMenu variant="row" />
+        </div>
+      </aside>
 
-      <main className="mx-auto w-full max-w-5xl flex-1 px-4 pt-6 pb-28 sm:px-6 sm:py-10">
-        {error && (
-          <Alert variant="destructive" className="mb-6">
-            <AlertTitle>Couldn’t load your vocabulary</AlertTitle>
-            <AlertDescription>
-              {error} — check your Supabase config in <code>.env.local</code> and
-              that the <code>vocab</code> table exists.
-            </AlertDescription>
-          </Alert>
-        )}
+      <div className="flex min-w-0 flex-1 flex-col">
+        {/* Phone and tablet: brand · word count · account, over the bottom
+            nav. Opaque — no blur behind it. */}
+        <header className="sticky top-0 z-20 border-b border-border bg-background lg:hidden">
+          <div className="mx-auto flex w-full max-w-5xl items-center gap-4 px-4 py-3 sm:px-6">
+            <Wordmark />
+            <p className="ml-auto text-sm whitespace-nowrap text-muted-foreground tabular-nums">
+              {wordCount}
+            </p>
+            <AccountMenu />
+          </div>
+        </header>
 
-        {/* Every panel stays mounted (forceMount) and is shown/hidden via
-            React's <Activity>, so each tab keeps its in-progress state when you
-            switch away — the flashcard session, a dictionary search, a half-typed
-            word, import preview rows. Activity also runs effect cleanup on hide
-            (e.g. Flashcards' keyboard listener detaches), so it doesn't leak
-            across tabs the way a plain always-mounted panel would. */}
-        <TabsContent value="add" forceMount>
-          <Activity mode={tab === "add" ? "visible" : "hidden"}>
-            <AddVocabForm onAdded={reload} />
-          </Activity>
-        </TabsContent>
-        <TabsContent value="dictionary" forceMount>
-          <Activity mode={tab === "dictionary" ? "visible" : "hidden"}>
+        <main
+          ref={mainRef}
+          id="main"
+          tabIndex={-1}
+          className="mx-auto w-full max-w-5xl flex-1 px-4 pt-6 pb-28 outline-none sm:px-6 lg:px-8 lg:pt-8 lg:pb-12"
+        >
+          {error && (
+            <Alert variant="destructive" className="mb-6">
+              <AlertTitle>Couldn’t load your words</AlertTitle>
+              <AlertDescription>
+                {error.replace(/\.$/, "")}. Check your connection, then retry.
+              </AlertDescription>
+              <AlertAction>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  // aria-disabled, not disabled: the button keeps focus while
+                  // the retry runs.
+                  onClick={() => void retry()}
+                  aria-disabled={retrying || undefined}
+                  className="aria-disabled:opacity-50"
+                >
+                  {retrying && <Spinner data-icon="inline-start" aria-hidden />}
+                  {retrying ? "Retrying…" : "Retry"}
+                </Button>
+              </AlertAction>
+            </Alert>
+          )}
+
+          {/* Every panel stays mounted (forceMount) and is shown/hidden via
+              React's <Activity>, so each tab keeps its in-progress state when you
+              switch away — the flashcard session, a dictionary search, a half-typed
+              word, import preview rows. Activity also runs effect cleanup on hide
+              (e.g. Flashcards' keyboard listener detaches), so it doesn't leak
+              across tabs the way a plain always-mounted panel would.
+              Panel (above) shows how each is hidden. */}
+          <Panel value="add" tab={tab} hydrated={hydrated}>
+            <AddVocabForm onAdded={reload} onRevealInList={revealWordInList} />
+          </Panel>
+          <Panel value="dictionary" tab={tab} hydrated={hydrated}>
             <DictionarySearch
               vocab={vocab}
               onAdded={reload}
               onRevealInList={revealWordInList}
             />
-          </Activity>
-        </TabsContent>
-        <TabsContent value="flashcards" forceMount>
-          <Activity mode={tab === "flashcards" ? "visible" : "hidden"}>
-            <Flashcards vocab={vocab} onVocabChanged={applyVocabUpdate} />
-          </Activity>
-        </TabsContent>
-        <TabsContent value="kanji" forceMount>
-          <Activity mode={tab === "kanji" ? "visible" : "hidden"}>
+          </Panel>
+          <Panel value="flashcards" tab={tab} hydrated={hydrated}>
+            <Flashcards
+              vocab={vocab}
+              heading="Flashcards"
+              loadState={loadState}
+              loadedAt={loadedAt}
+              onVocabChanged={applyVocabUpdate}
+            />
+          </Panel>
+          <Panel value="kanji" tab={tab} hydrated={hydrated}>
             <KanjiTab
               vocab={vocab}
               kanjiVocab={kanjiVocab}
+              loadState={loadState}
+              loadedAt={loadedAt}
               active={tab === "kanji"}
               onVocabChanged={applyVocabUpdate}
             />
-          </Activity>
-        </TabsContent>
-        <TabsContent value="smart-kanji" forceMount>
-          <Activity mode={tab === "smart-kanji" ? "visible" : "hidden"}>
+          </Panel>
+          <Panel value="smart-kanji" tab={tab} hydrated={hydrated}>
             <SmartKanjiDeck
+              heading="Smart Kanji"
               active={tab === "smart-kanji"}
               vocab={vocab}
               onVocabChanged={applyVocabUpdate}
             />
-          </Activity>
-        </TabsContent>
-        <TabsContent value="list" forceMount>
-          <Activity mode={tab === "list" ? "visible" : "hidden"}>
+          </Panel>
+          <Panel value="list" tab={tab} hydrated={hydrated}>
             <VocabTable
               vocab={vocab}
+              loadState={loadState}
               onChanged={reload}
               revealWord={listReveal}
             />
-          </Activity>
-        </TabsContent>
-        <TabsContent value="import" forceMount>
-          <Activity mode={tab === "import" ? "visible" : "hidden"}>
+          </Panel>
+          <Panel value="import" tab={tab} hydrated={hydrated}>
             <ImportPanel vocab={vocab} onImported={reload} />
-          </Activity>
-        </TabsContent>
-      </main>
+          </Panel>
+        </main>
+      </div>
 
       {/* Mobile: fixed bottom navigation in the thumb zone. */}
       <nav
         data-app-nav
         aria-label="Sections"
-        className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-background/95 pb-[env(safe-area-inset-bottom)] backdrop-blur sm:hidden"
+        className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-background px-2 pb-[env(safe-area-inset-bottom)] lg:hidden"
       >
         <ul className="grid grid-cols-7">
           {TABS.map((t) => {
             const active = tab === t.value;
             return (
               <li key={t.value}>
-                <button
-                  type="button"
-                  onClick={() => setTab(t.value)}
+                {/* A real link (the tab is in the URL), so Cmd/Ctrl-click and
+                    middle-click open it in a new browser tab. */}
+                <a
+                  href={t.value === DEFAULT_TAB ? "/" : `/?tab=${t.value}`}
+                  onClick={(event) => {
+                    const newTab =
+                      event.metaKey || event.ctrlKey || event.shiftKey;
+                    if (newTab || event.button !== 0) return;
+                    event.preventDefault();
+                    setTab(t.value);
+                  }}
                   aria-current={active ? "page" : undefined}
-                  className="flex w-full flex-col items-center gap-1 px-1 pt-2 pb-1.5 outline-none"
+                  aria-label={t.label}
+                  className="flex w-full flex-col items-center gap-1 rounded-lg px-1 pt-2 pb-1.5 outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
                 >
+                  {/* Fills its column (capped), so the active pill never
+                      spills into the neighbouring item on a 320px phone. */}
+                  {/* Active: a neutral pill and ink, like the sidebar — no
+                      brand colour on the chrome. */}
                   <span
                     className={cn(
-                      "flex items-center justify-center rounded-full px-5 py-1 transition-colors",
-                      active ? "bg-primary/15 text-primary" : "text-muted-foreground"
+                      "flex w-full max-w-16 items-center justify-center rounded-full py-1 transition-colors",
+                      active ? "bg-secondary text-foreground" : "text-muted-foreground"
                     )}
                   >
                     <t.icon className="size-6 shrink-0" aria-hidden />
                   </span>
                   <span
                     className={cn(
-                      "text-[11px] leading-none font-medium",
-                      active ? "text-primary" : "text-muted-foreground"
+                      "text-[0.65rem] leading-none",
+                      active
+                        ? "font-semibold text-foreground"
+                        : "font-medium text-muted-foreground"
                     )}
                   >
                     {t.short}
                   </span>
-                </button>
+                </a>
               </li>
             );
           })}
