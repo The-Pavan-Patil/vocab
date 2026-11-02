@@ -20,6 +20,16 @@ import {
   type Vocab,
   type VocabLoadState,
 } from "@/lib/types";
+import {
+  KANJI_STUDY_FILTERS,
+  SEARCH_FIELDS,
+  filterVocab,
+  isKanjiStudyFilter,
+  isSearchField,
+  studiedKanjiOf,
+  type KanjiStudyFilter,
+  type SearchField,
+} from "@/lib/vocab-filter";
 import EditVocabDialog from "@/components/EditVocabDialog";
 import ScreenHeader from "@/components/ScreenHeader";
 import { Button } from "@/components/ui/button";
@@ -67,6 +77,14 @@ import {
 // Thousands grouping in the reader's locale.
 const WORDS = new Intl.NumberFormat();
 
+// What the toolbar is showing: the search, where it looks, and the filters.
+type Filters = {
+  query: string;
+  cat: string;
+  field: SearchField;
+  kanjiStudy: KanjiStudyFilter;
+};
+
 const EXPORT_FILENAME = {
   docx: "japanese-vocab.docx",
   pdf: "japanese-vocab.pdf",
@@ -85,28 +103,45 @@ export default function VocabTable({
 }) {
   const [query, setQuery] = useState("");
   const [cat, setCat] = useState("all");
-  // Search and filter are mirrored into the URL (?search=…&category=…) so a
-  // reload or a shared link shows the same slice of the list. The URL is read
-  // once, after hydration; from then on local state leads and the URL follows.
+  const [field, setField] = useState<SearchField>("all");
+  const [kanjiStudy, setKanjiStudy] = useState<KanjiStudyFilter>("all");
+  // Search and filters are mirrored into the URL (?search=…&category=…&field=…
+  // &study=…) so a reload or a shared link shows the same slice of the list.
+  // The URL is read once, after hydration; from then on local state leads and
+  // the URL follows.
   const urlSearch = useSearchParam("search");
   const urlCategory = useSearchParam("category");
+  const urlField = useSearchParam("field");
+  const urlStudy = useSearchParam("study");
   const [adoptedUrl, setAdoptedUrl] = useState(false);
-  if (!adoptedUrl && (urlSearch !== null || urlCategory !== null)) {
+  if (
+    !adoptedUrl &&
+    (urlSearch !== null ||
+      urlCategory !== null ||
+      urlField !== null ||
+      urlStudy !== null)
+  ) {
     setAdoptedUrl(true);
     if (urlSearch !== null) setQuery(urlSearch);
     if (urlCategory !== null && CATEGORIES.includes(urlCategory as never)) {
       setCat(urlCategory);
     }
+    if (urlField !== null && isSearchField(urlField)) setField(urlField);
+    if (urlStudy !== null && isKanjiStudyFilter(urlStudy)) {
+      setKanjiStudy(urlStudy);
+    }
   }
   const urlWriteRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  function syncUrl(nextQuery: string, nextCat: string) {
+  function syncUrl(next: Filters) {
     setAdoptedUrl(true);
     if (urlWriteRef.current) clearTimeout(urlWriteRef.current);
     // Debounced: one history write when typing pauses, not one per keystroke.
     urlWriteRef.current = setTimeout(() => {
       setSearchParams({
-        search: nextQuery.trim() || null,
-        category: nextCat === "all" ? null : nextCat,
+        search: next.query.trim() || null,
+        category: next.cat === "all" ? null : next.cat,
+        field: next.field === "all" ? null : next.field,
+        study: next.kanjiStudy === "all" ? null : next.kanjiStudy,
       });
     }, 300);
   }
@@ -126,24 +161,29 @@ export default function VocabTable({
     revealWord !== null &&
     revealWord !== undefined &&
     revealWord.requestId !== handledRevealId;
-  const activeQuery = showingReveal ? revealWord.word : query;
-  const activeCat = showingReveal ? "all" : cat;
+  // A revealed word shows on its own, every filter cleared.
+  const active: Filters = showingReveal
+    ? { query: revealWord.word, cat: "all", field: "all", kanjiStudy: "all" }
+    : { query, cat, field, kanjiStudy };
   // Filtering a long list on every keystroke would make typing lag; the input
-  // stays on `activeQuery` and the table catches up with the deferred copy.
-  const filterQuery = useDeferredValue(activeQuery);
+  // stays on `active.query` and the table catches up with the deferred copy.
+  const filterQuery = useDeferredValue(active.query);
 
-  const filtered = useMemo(() => {
-    const q = filterQuery.trim().toLowerCase();
-    return vocab.filter((v) => {
-      if (activeCat !== "all" && v.category !== activeCat) return false;
-      if (!q) return true;
-      return [v.kanji, v.romaji, v.english, v.tips, v.sentence, v.category]
-        .filter(Boolean)
-        .some((s) => s!.toLowerCase().includes(q));
-    });
-  }, [vocab, filterQuery, activeCat]);
+  const filtered = useMemo(
+    () =>
+      filterVocab(vocab, {
+        query: filterQuery,
+        field: active.field,
+        category: active.cat,
+        kanjiStudy: active.kanjiStudy,
+      }),
+    [vocab, filterQuery, active.field, active.cat, active.kanjiStudy]
+  );
 
-  const filtering = activeQuery.trim() !== "" || activeCat !== "all";
+  const filtering =
+    active.query.trim() !== "" ||
+    active.cat !== "all" ||
+    active.kanjiStudy !== "all";
   const inKanjiDeck = vocab.filter((v) => v.study_as_kanji).length;
 
   // The count is spoken once typing settles, not after every keystroke.
@@ -156,6 +196,18 @@ export default function VocabTable({
 
   function finishReveal() {
     if (revealWord) setHandledRevealId(revealWord.requestId);
+  }
+
+  // Any toolbar change keeps what's on screen (a revealed word included) as
+  // the user's own search, then applies the change.
+  function changeFilters(patch: Partial<Filters>) {
+    const next = { ...active, ...patch };
+    setQuery(next.query);
+    setCat(next.cat);
+    setField(next.field);
+    setKanjiStudy(next.kanjiStudy);
+    finishReveal();
+    syncUrl(next);
   }
 
   async function downloadList(format: "docx" | "pdf") {
@@ -234,7 +286,8 @@ export default function VocabTable({
           `${WORDS.format(vocab.length)} ${vocab.length === 1 ? "word" : "words"} · ${WORDS.format(inKanjiDeck)} in the Kanji deck`}
       </ScreenHeader>
 
-      {/* Toolbar */}
+      {/* Toolbar. On a phone the filters stretch to share full rows instead
+          of each leaving a ragged gap; from sm up they keep fixed widths. */}
       <div className="flex flex-wrap items-center gap-3">
         <InputGroup className="min-w-[180px] flex-1">
           <InputGroupAddon>
@@ -248,26 +301,67 @@ export default function VocabTable({
             autoComplete="off"
             spellCheck={false}
             placeholder="Search words…"
-            value={activeQuery}
-            onChange={(event) => {
-              setQuery(event.target.value);
-              setCat(activeCat);
-              finishReveal();
-              syncUrl(event.target.value, activeCat);
-            }}
+            value={active.query}
+            onChange={(event) => changeFilters({ query: event.target.value })}
           />
         </InputGroup>
 
         <Select
-          value={activeCat}
-          onValueChange={(category) => {
-            setQuery(activeQuery);
-            setCat(category);
-            finishReveal();
-            syncUrl(activeQuery, category);
+          value={active.field}
+          onValueChange={(next) => {
+            if (isSearchField(next)) changeFilters({ field: next });
           }}
         >
-          <SelectTrigger className="w-40" aria-label="Filter by category">
+          <SelectTrigger
+            className="min-w-32 flex-1 sm:w-36 sm:flex-none"
+            aria-label="Search in"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              {SEARCH_FIELDS.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+
+        {/* With kanji in the search, "Studied as Kanji" checks those kanji —
+            search 上 to find every word where you turned 上 on. */}
+        <Select
+          value={active.kanjiStudy}
+          onValueChange={(next) => {
+            if (isKanjiStudyFilter(next)) changeFilters({ kanjiStudy: next });
+          }}
+        >
+          <SelectTrigger
+            className="min-w-44 flex-1 sm:w-48 sm:flex-none"
+            aria-label="Filter by kanji study"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              {KANJI_STUDY_FILTERS.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+
+        <Select
+          value={active.cat}
+          onValueChange={(category) => changeFilters({ cat: category })}
+        >
+          <SelectTrigger
+            className="min-w-36 flex-1 sm:w-40 sm:flex-none"
+            aria-label="Filter by category"
+          >
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -314,7 +408,7 @@ export default function VocabTable({
             <EmptyDescription>
               {vocab.length === 0
                 ? "Add your first word from the Dictionary or Add tab."
-                : "Try a different search or category."}
+                : "Try a different search or filter."}
             </EmptyDescription>
           </EmptyHeader>
         </Empty>
@@ -436,22 +530,38 @@ const VocabRow = memo(function VocabRow({
   onEdit: (word: Vocab) => void;
   onDelete: (word: Vocab) => void;
 }) {
+  const studied = studiedKanjiOf(v);
+  const studiedLabel = `Studying ${studied.join(", ")} as Kanji`;
   return (
     // No hover fill: the pinned cells are opaque, and a fill would stop at them.
     <TableRow className="hover:bg-transparent">
       <TableCell className={cn("text-base font-medium", STICKY_FIRST)}>
-        <span lang="ja" translate="no" className="jp">
-          {v.kanji}
-        </span>
         {/* Kanji-deck membership rides on the word (the column it used to
-            have was empty on most rows). Same icon as the kanji decks' empty
-            states. */}
-        {v.study_as_kanji && (
-          <span title="Also studied as Kanji">
+            have was empty on most rows): the kanji you turned on carry the
+            study hue, underlined so it isn't colour alone, and the icon (the
+            kanji decks' own) names them. */}
+        <span lang="ja" translate="no" className="jp">
+          {studied.length > 0
+            ? [...v.kanji].map((character, index) => (
+                <span
+                  key={index}
+                  className={
+                    studied.includes(character)
+                      ? "text-data underline decoration-data/50 underline-offset-4"
+                      : undefined
+                  }
+                >
+                  {character}
+                </span>
+              ))
+            : v.kanji}
+        </span>
+        {studied.length > 0 && (
+          <span title={studiedLabel}>
             <Languages
               className="ml-1.5 inline-block size-3.5 align-[-0.1em] text-muted-foreground"
               role="img"
-              aria-label="In the Kanji deck"
+              aria-label={studiedLabel}
             />
           </span>
         )}
