@@ -45,3 +45,10 @@ next-env.d.ts
 *.db
 .beads-credential-key
 .beads/proxieddb/
+
+# forgeflow runtime
+adws/adw_data/sessions/
+adws/adw_data/forgeflow.db*
+.env
+__pycache__/
+*.pyc

@@ -1,0 +1,370 @@
+--- a/lib/sentence-romaji.ts
++++ b/lib/sentence-romaji.ts
+@@ -11,6 +11,16 @@
+ export type Converter = {
+   convert: (text: string, opts: Record<string, unknown>) => Promise<string>;
+ };
++
++export type JapaneseToken = {
++  surface_form: string;
++  basic_form: string;
++  pos: string;
++  pos_detail_1: string;
++};
++
++type Analyzer = { parse: (text: string) => Promise<JapaneseToken[]> };
++let analyzer: Analyzer | null = null;
+ 
+ let converter: Converter | null = null;
+ let initPromise: Promise<Converter> | null = null;
+@@ -27,11 +37,11 @@
+         require("kuroshiro-analyzer-kuromoji").default ||
+         require("kuroshiro-analyzer-kuromoji");
+       const k = new Kuroshiro();
+-      await k.init(
+-        new KuromojiAnalyzer({
+-          dictPath: path.join(process.cwd(), "node_modules/kuromoji/dict"),
+-        })
+-      );
++      const nextAnalyzer = new KuromojiAnalyzer({
++        dictPath: path.join(process.cwd(), "node_modules/kuromoji/dict"),
++      }) as Analyzer;
++      await k.init(nextAnalyzer);
++      analyzer = nextAnalyzer;
+       return k as Converter;
+     })();
+   }
+@@ -42,6 +52,13 @@
+     initPromise = null; // allow a later retry if init failed transiently
+     throw e;
+   }
++}
++
++// Reuse the tokenizer already loaded for example readings when resolving
++// dictionary inflections. This stays on the server.
++export async function tokenizeJapanese(text: string): Promise<JapaneseToken[]> {
++  await getConverter();
++  return analyzer?.parse(text) ?? [];
+ }
+ 
+ export async function toSentenceRomaji(text: string): Promise<string> {
+--- a/lib/types.ts
++++ b/lib/types.ts
+@@ -91,6 +91,7 @@
+   word: string; // primary written form (kanji/kana)
+   reading: string; // kana reading
+   romaji: string; // reading converted to romaji
++  matchedForm?: string; // inflected query that resolved to this headword
+   isCommon: boolean;
+   jlpt: string[]; // e.g. ["jlpt-n5"]
+   senses: DictSense[];
+--- a/app/api/dictionary/route.ts
++++ b/app/api/dictionary/route.ts
+@@ -2,6 +2,9 @@
+ import { NextResponse } from "next/server";
+ import { toRomaji } from "wanakana";
+ import type JishoApi from "unofficial-jisho-api";
++import type { JishoResult } from "unofficial-jisho-api";
++import { tokenizeJapanese } from "@/lib/sentence-romaji";
++import { wordFormCandidates, type WordFormCandidate } from "@/lib/word-forms";
+ import type { DictEntry } from "@/lib/types";
+ 
+ export const runtime = "nodejs";
+@@ -14,6 +17,42 @@
+ const JishoAPI = require("unofficial-jisho-api") as { new (): JishoApi };
+ const jisho = new JishoAPI();
+ 
++function hasExactForm(entry: JishoResult, word: string): boolean {
++  return entry.japanese.some((form) =>
++    form.word === word || form.reading === word
++  );
++}
++
++function matchesCandidate(
++  entry: JishoResult,
++  candidate: WordFormCandidate
++): boolean {
++  if (!hasExactForm(entry, candidate.word)) return false;
++  const pos = entry.senses.flatMap((sense) => sense.parts_of_speech).join(" ").toLowerCase();
++  return candidate.kind === "verb"
++    ? pos.includes("verb")
++    : pos.includes("noun") || pos.includes("suru verb");
++}
++
++function toDictEntry(entry: JishoResult, matchedForm?: string): DictEntry {
++  const reading = entry.japanese[0]?.reading ?? "";
++  const word = entry.japanese[0]?.word ?? reading;
++  return {
++    slug: entry.slug,
++    word,
++    reading,
++    romaji: reading ? toRomaji(reading) : "",
++    matchedForm,
++    isCommon: Boolean(entry.is_common),
++    jlpt: entry.jlpt ?? [],
++    senses: (entry.senses ?? []).map((sense) => ({
++      englishDefinitions: sense.english_definitions ?? [],
++      partsOfSpeech: sense.parts_of_speech ?? [],
++      tags: sense.tags ?? [],
++    })),
++  };
++}
++
+ // GET /api/dictionary?q= — search words via Jisho (JMdict/KanjiDic sources).
+ export async function GET(request: Request) {
+   const q = new URL(request.url).searchParams.get("q")?.trim() ?? "";
+@@ -23,24 +62,45 @@
+ 
+   try {
+     const res = await jisho.searchForPhrase(q);
+-    const results: DictEntry[] = (res.data ?? []).map((r) => {
+-      const reading = r.japanese[0]?.reading ?? "";
+-      const word = r.japanese[0]?.word ?? reading;
+-      return {
+-        slug: r.slug,
+-        word,
+-        reading,
+-        romaji: reading ? toRomaji(reading) : "",
+-        isCommon: Boolean(r.is_common),
+-        jlpt: r.jlpt ?? [],
+-        senses: (r.senses ?? []).map((s) => ({
+-          englishDefinitions: s.english_definitions ?? [],
+-          partsOfSpeech: s.parts_of_speech ?? [],
+-          tags: s.tags ?? [],
+-        })),
+-      };
+-    });
+-    return NextResponse.json({ results });
++    const direct = res.data ?? [];
++    let formMatches: JishoResult[] = [];
++
++    // Direct headwords keep their normal ranking. For other Japanese queries,
++    // look up Kuromoji's base form and validate it against an exact JMdict form
++    // and part of speech before adding it to the result list.
++    if (
++      !direct.some((entry) => hasExactForm(entry, q)) &&
++      /[\u3040-\u30ff\u3400-\u9fff]/u.test(q) &&
++      q.length <= 40
++    ) {
++      try {
++        const candidates = wordFormCandidates(q, await tokenizeJapanese(q));
++        const found = await Promise.all(
++          candidates.map(async (candidate) => {
++            try {
++              const response = await jisho.searchForPhrase(candidate.word);
++              return (response.data ?? []).filter((entry) =>
++                matchesCandidate(entry, candidate)
++              );
++            } catch {
++              return [] as JishoResult[];
++            }
++          })
++        );
++        formMatches = found.flat();
++      } catch {
++        // Tokenizer failure should not hide ordinary dictionary results.
++      }
++    }
++
++    const results = new Map<string, DictEntry>();
++    for (const entry of formMatches) {
++      if (!results.has(entry.slug)) results.set(entry.slug, toDictEntry(entry, q));
++    }
++    for (const entry of direct) {
++      if (!results.has(entry.slug)) results.set(entry.slug, toDictEntry(entry));
++    }
++    return NextResponse.json({ results: [...results.values()] });
+   } catch (e) {
+     return NextResponse.json(
+       { error: (e as Error).message || "Dictionary search failed." },
+--- a/components/DictionarySearch.tsx
++++ b/components/DictionarySearch.tsx
+@@ -362,7 +362,7 @@
+             </EmptyMedia>
+             <EmptyTitle>Look up a Japanese word</EmptyTitle>
+             <EmptyDescription>
+-              Search by English meaning, Japanese (kanji or kana) or romaji.
++              Search by English meaning, Japanese word or form, or romaji.
+             </EmptyDescription>
+           </EmptyHeader>
+         </Empty>
+@@ -425,8 +425,13 @@
+                     </Button>
+                   </div>
+ 
+-                  {(entry.isCommon || jlpt) && (
++                  {(entry.matchedForm || entry.isCommon || jlpt) && (
+                     <div className="flex flex-wrap gap-1.5">
++                      {entry.matchedForm && (
++                        <Badge variant="outline" lang="ja" translate="no">
++                          Matched: {entry.matchedForm}
++                        </Badge>
++                      )}
+                       {entry.isCommon && (
+                         <Badge variant="secondary">common</Badge>
+                       )}
+--- /dev/null
++++ b/lib/word-forms.ts
+@@ -0,0 +1,80 @@
++// Pure candidate selection. The route uses Kuromoji to get these tokens, then
++// checks each candidate against JMdict before showing it as a matched form.
++export type JapaneseToken = {
++  surface_form: string;
++  basic_form: string;
++  pos: string;
++  pos_detail_1: string;
++};
++
++export type WordFormCandidate = {
++  word: string;
++  kind: "verb" | "noun";
++};
++
++function isVerbEnding(token: JapaneseToken): boolean {
++  return (
++    token.pos === "助動詞" ||
++    (token.pos === "助詞" && ["て", "で"].includes(token.surface_form)) ||
++    (token.pos === "動詞" &&
++      token.pos_detail_1 === "非自立" &&
++      ["いる", "おる", "しまう"].includes(token.basic_form))
++  );
++}
++
++export function wordFormCandidates(
++  query: string,
++  tokens: JapaneseToken[]
++): WordFormCandidate[] {
++  if (
++    !query ||
++    query.length > 40 ||
++    /\s/.test(query) ||
++    tokens.length === 0 ||
++    tokens.map((token) => token.surface_form).join("") !== query
++  ) {
++    return [];
++  }
++
++  const [head, ...tail] = tokens;
++  if (
++    head.pos === "動詞" &&
++    head.pos_detail_1 !== "非自立" &&
++    head.basic_form !== "*" &&
++    head.basic_form !== query &&
++    tail.every(isVerbEnding)
++  ) {
++    return [{ word: head.basic_form, kind: "verb" }];
++  }
++
++  if (head.pos !== "名詞" || !head.surface_form || tail.length === 0) {
++    return [];
++  }
++
++  // サ変 nouns such as 勉強 take する. Jisho may list the noun, the combined
++  // verb, or both, so search both exact headwords.
++  if (
++    head.pos_detail_1 === "サ変接続" &&
++    tail[0].pos === "動詞" &&
++    tail[0].basic_form === "する" &&
++    tail.slice(1).every(isVerbEnding)
++  ) {
++    return [
++      { word: head.surface_form, kind: "noun" },
++      { word: `${head.surface_form}する`, kind: "verb" },
++    ];
++  }
++
++  // Nouns have no verb-like conjugation, but can appear with a copula or
++  // plural suffix. Only these whole-word patterns are treated as noun forms.
++  if (
++    tail.every((token) => token.pos === "助動詞") ||
++    (tail.length === 1 &&
++      tail[0].pos === "名詞" &&
++      tail[0].pos_detail_1 === "接尾" &&
++      ["たち", "達", "ら", "等"].includes(tail[0].surface_form))
++  ) {
++    return [{ word: head.surface_form, kind: "noun" }];
++  }
++  return [];
++}
+--- /dev/null
++++ b/lib/word-forms.test.ts
+@@ -0,0 +1,79 @@
++import { test } from "node:test";
++import assert from "node:assert/strict";
++import { wordFormCandidates, type JapaneseToken } from "./word-forms.ts";
++
++function token(
++  surface_form: string,
++  basic_form: string,
++  pos: string,
++  pos_detail_1 = "*"
++): JapaneseToken {
++  return { surface_form, basic_form, pos, pos_detail_1 };
++}
++
++test("resolves polite and past verb forms", () => {
++  assert.deepEqual(
++    wordFormCandidates("食べました", [
++      token("食べ", "食べる", "動詞", "自立"),
++      token("まし", "ます", "助動詞"),
++      token("た", "た", "助動詞"),
++    ]),
++    [{ word: "食べる", kind: "verb" }]
++  );
++  assert.deepEqual(
++    wordFormCandidates("書いた", [
++      token("書い", "書く", "動詞", "自立"),
++      token("た", "た", "助動詞"),
++    ]),
++    [{ word: "書く", kind: "verb" }]
++  );
++});
++
++test("resolves copula, plural, and suru noun forms", () => {
++  assert.deepEqual(
++    wordFormCandidates("猫でした", [
++      token("猫", "猫", "名詞", "一般"),
++      token("でし", "です", "助動詞"),
++      token("た", "た", "助動詞"),
++    ]),
++    [{ word: "猫", kind: "noun" }]
++  );
++  assert.deepEqual(
++    wordFormCandidates("猫たち", [
++      token("猫", "猫", "名詞", "一般"),
++      token("たち", "たち", "名詞", "接尾"),
++    ]),
++    [{ word: "猫", kind: "noun" }]
++  );
++  assert.deepEqual(
++    wordFormCandidates("勉強した", [
++      token("勉強", "勉強", "名詞", "サ変接続"),
++      token("し", "する", "動詞", "自立"),
++      token("た", "た", "助動詞"),
++    ]),
++    [
++      { word: "勉強", kind: "noun" },
++      { word: "勉強する", kind: "verb" },
++    ]
++  );
++});
++
++test("does not turn phrases or unrelated words into form matches", () => {
++  assert.deepEqual(
++    wordFormCandidates("猫を", [
++      token("猫", "猫", "名詞", "一般"),
++      token("を", "を", "助詞"),
++    ]),
++    []
++  );
++  assert.deepEqual(
++    wordFormCandidates("日本語を勉強した", [
++      token("日本語", "日本語", "名詞", "一般"),
++      token("を", "を", "助詞"),
++      token("勉強", "勉強", "名詞", "サ変接続"),
++      token("し", "する", "動詞", "自立"),
++      token("た", "た", "助動詞"),
++    ]),
++    []
++  );
++});

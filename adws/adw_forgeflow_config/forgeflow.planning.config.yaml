@@ -1,0 +1,63 @@
+# Dedicated roster for `/forgeflow plan`. It is isolated so adding the wider
+# planning command cannot retune or widen permissions for existing ADWs.
+defaults:
+  coding_agent: codex
+  model: gpt-5.6-terra
+  thinking: medium
+  permission_profile: ""
+  subagents: false
+  tools:
+    - read
+    - search
+    - bash
+    - apply_patch
+  protected_files:
+    - .git/
+    - adws/adw_modules/
+    - adws/adw_forgeflow_config/
+    - adws/adw_*.py
+    - .codex/
+  data_dir: adws/adw_data
+
+observability:
+  db: adws/adw_data/forgeflow.db
+  poll_ms: 500
+
+agents:
+  - name: strategist
+    model: gpt-5.6
+    thinking: high
+    color: "#d97706"
+    purpose: Classify product work and ask only evidence-backed decisions the repository cannot answer.
+    permission_profile: forgeflow-strategist
+    subagents: true
+    prompt_engineering:
+      system: adws/adw_data/prompt_engineering/strategist/system.md
+      user: adws/adw_data/prompt_engineering/strategist/user.md
+    writes: []
+    tools:
+      - read
+      - search
+      - bash
+      - native_subagents
+
+  - name: feature_planner
+    model: gpt-5.6
+    thinking: high
+    color: "#7c3aed"
+    purpose: Publish broad, reliability-aware feature and project plans without implementing them.
+    permission_profile: forgeflow-feature-planner
+    subagents: true
+    prompt_engineering:
+      system: adws/adw_data/prompt_engineering/feature_planner/system.md
+      user: adws/adw_data/prompt_engineering/feature_planner/user.md
+    writes:
+      - specs/**
+      - .specify/**
+      - .beads/**
+    tools:
+      - read
+      - search
+      - bash
+      - apply_patch
+      - native_subagents
