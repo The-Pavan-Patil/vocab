@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KanjiCard, KanjiInfo } from "@/lib/types";
 import { fetchKanji, fetchKanjiCards } from "@/lib/api";
 
@@ -115,7 +115,24 @@ export function useKanjiCards({
     [mergeKanji]
   );
 
-  return { cards, kanji, failed, loadedAt, loading, error, retry, ensureKanji };
+  // Every kanji you study, in any word — the active cards are exactly the
+  // kanji turned on somewhere. A card's front never hints these.
+  const studied = useMemo(
+    () => new Set(cards.map((card) => card.character)),
+    [cards]
+  );
+
+  return {
+    cards,
+    kanji,
+    studied,
+    failed,
+    loadedAt,
+    loading,
+    error,
+    retry,
+    ensureKanji,
+  };
 }
 
 export type KanjiCardsStore = ReturnType<typeof useKanjiCards>;

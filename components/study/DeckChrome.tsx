@@ -41,15 +41,23 @@ export function SessionLine({ children }: { children: ReactNode }) {
   );
 }
 
-/** The deck's settings on the left, the save status on the right. */
+/**
+ * The deck's settings on the left; the save status and "Edit word" on the
+ * right. Edit sits up here, above the card, because under it a phone's tab bar
+ * hid it — fixing a word mid-session should never need a scroll.
+ */
 export function DeckToolbar({
   children,
   slowSave,
   pendingCount,
+  edit,
 }: {
   children: ReactNode;
   slowSave: boolean;
   pendingCount: number;
+  // Edit the showing card's word. Left out when there's no card, or its word
+  // isn't known.
+  edit?: { word: string; onEdit: () => void; disabled: boolean };
 }) {
   return (
     <div className="flex flex-wrap items-center justify-between gap-3">
@@ -60,6 +68,17 @@ export function DeckToolbar({
             <Spinner data-icon="inline-start" aria-hidden /> Saving{" "}
             <span className="tabular-nums">{pendingCount}</span>…
           </Badge>
+        )}
+        {edit && (
+          <Button
+            variant="outline"
+            onClick={edit.onEdit}
+            disabled={edit.disabled}
+            aria-label={`Edit word ${edit.word}`}
+          >
+            <Pencil aria-hidden />
+            Edit word
+          </Button>
         )}
       </div>
     </div>
@@ -132,19 +151,15 @@ export function RestartSessionDialog({
 }
 
 /**
- * Under the card: restart the session · edit the word · (word decks) toggle the
- * Marathi hint. `onEdit` is left out when the card's word isn't known.
+ * Under the card: restart the session · (word decks) toggle the Marathi hint.
+ * Editing the word lives in the DeckToolbar, above the card.
  */
 export function DeckActions({
   onRestart,
-  onEdit,
-  editLabel,
   hint,
   disabled,
 }: {
   onRestart: () => void;
-  onEdit?: () => void;
-  editLabel?: string;
   hint?: { pressed: boolean; onToggle: () => void };
   disabled: boolean;
 }) {
@@ -159,17 +174,6 @@ export function DeckActions({
       >
         <RotateCcw aria-hidden />
       </Button>
-      {onEdit && (
-        <Button
-          variant="ghost"
-          size="icon-lg"
-          onClick={onEdit}
-          disabled={disabled}
-          aria-label={editLabel}
-        >
-          <Pencil aria-hidden />
-        </Button>
-      )}
       {hint && (
         <Button
           variant="ghost"

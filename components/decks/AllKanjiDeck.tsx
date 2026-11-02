@@ -45,7 +45,7 @@ import {
 
 // The All Kanji deck: every kanji card you study, at every level, newest word
 // first with each kanji's words grouped together; furigana marks the word's
-// kanji you turned off. It studies the same cards as Smart Kanji but on its
+// kanji you don't study in any word. It studies the same cards as Smart Kanji but on its
 // own independent schedule — the card's all_* columns (lib/decks.ts
 // "all-kanji") — so grading here never moves a Smart Kanji due date.
 
@@ -201,7 +201,19 @@ export default function AllKanjiDeck({
 
       <SessionLine>{sessionLine}</SessionLine>
 
-      <DeckToolbar slowSave={session.slowSave} pendingCount={session.pendingCount}>
+      <DeckToolbar
+        slowSave={session.slowSave}
+        pendingCount={session.pendingCount}
+        edit={
+          cardWord
+            ? {
+                word: cardWord.kanji,
+                onEdit: () => setEditing(cardWord),
+                disabled: session.blocked,
+              }
+            : undefined
+        }
+      >
         <SessionSizeSelect
           value={newLimit}
           onChange={changeSize}
@@ -244,7 +256,11 @@ export default function AllKanjiDeck({
             className="px-5 py-5 sm:px-6 sm:py-6"
           >
             {!flipped ? (
-              <KanjiInWordFront id={session.faceId} card={card} />
+              <KanjiInWordFront
+                id={session.faceId}
+                card={card}
+                studied={store.studied}
+              />
             ) : (
               <KanjiInWordBack
                 id={session.faceId}
@@ -275,8 +291,6 @@ export default function AllKanjiDeck({
 
           <DeckActions
             onRestart={() => session.guardReset(session.restart)}
-            onEdit={cardWord ? () => setEditing(cardWord) : undefined}
-            editLabel={cardWord ? `Edit ${cardWord.kanji}` : undefined}
             disabled={session.blocked}
           />
         </>

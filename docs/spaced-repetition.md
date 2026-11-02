@@ -266,9 +266,10 @@ are two separate cards, grouped under 食.
 - **Smart Kanji** filters by an **active JLPT level**. The level is
   **cumulative** — selecting N4 includes N5 + N4 (every level that easy or
   easier) — plus an **All** option. Uses the card's base SRS columns, with
-  furigana under the word's turned-off kanji.
+  furigana under the word's kanji you don't study in any word.
 - **All Kanji** studies every card, newest word first with each kanji's words
-  grouped (`buildAllKanjiQueue`), with furigana under the word's turned-off kanji.
+  grouped (`buildAllKanjiQueue`), with furigana under the word's kanji you
+  don't study in any word.
   It has its **own independent schedule** — the card's `all_*` columns
   (`0012_all_kanji_schedule.sql`), logged as `kanji_all` — so grading a card
   here never moves its Smart Kanji due date. It started fresh: every card was
@@ -302,7 +303,9 @@ All Kanji   ─ projectCard(card, "all-kanji") ─ buildAllKanjiQueue(cards) ─
   under **All levels**. In both decks, ordered `word_prompt_parts` show
   furigana under segments made entirely from turned-off kanji, while selected
   kanji remain unhinted — whatever JLPT level Smart Kanji is filtered to, the
-  toggle alone decides. Mixed unsplittable segments remain unhinted rather than
+  toggle alone decides. A kanji turned on in ANY word is never hinted: the
+  front drops the hint for every character with an active card
+  (`hideStudiedReadings`), so studying 上 through 上手 also hides it in 上着. Mixed unsplittable segments remain unhinted rather than
   displaying a guessed partial reading. Parts are written at sync time, so a
   word synced before the compound split keeps its old parts until it is edited
   or a full sync (`POST /api/kanji-cards/sync`) runs.

@@ -44,6 +44,23 @@ export function wordKanjiChars(cards: { word: string }[]): string[] {
 }
 
 /**
+ * Drop the furigana from every prompt run holding a kanji you study in ANY
+ * word. A card's stored runs only know its own word's selection, so 上着 would
+ * still hint 上 although 上手 has you studying it. `studied` is the characters
+ * of the active cards — exactly the kanji turned on somewhere.
+ */
+export function hideStudiedReadings<
+  T extends { surface: string; reading: string | null },
+>(parts: T[], studied: ReadonlySet<string>): T[] {
+  return parts.map((part) =>
+    part.reading &&
+    kanjiChars(part.surface).some((character) => studied.has(character))
+      ? { ...part, reading: null }
+      : part
+  );
+}
+
+/**
  * Cluster cards so every card sharing a `character` is consecutive, preserving
  * each character's first-appearance order in the input (stable within a group
  * too). Feeding a newest-first list therefore yields groups ordered by their

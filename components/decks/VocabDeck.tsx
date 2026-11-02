@@ -212,7 +212,19 @@ export default function VocabDeck({
 
       <SessionLine>{sessionLine}</SessionLine>
 
-      <DeckToolbar slowSave={session.slowSave} pendingCount={session.pendingCount}>
+      <DeckToolbar
+        slowSave={session.slowSave}
+        pendingCount={session.pendingCount}
+        edit={
+          card
+            ? {
+                word: card.kanji,
+                onEdit: () => setEditing(card),
+                disabled: session.blocked,
+              }
+            : undefined
+        }
+      >
         <CategorySelect
           value={category}
           onChange={changeCategory}
@@ -303,8 +315,6 @@ export default function VocabDeck({
 
           <DeckActions
             onRestart={() => session.guardReset(session.restart)}
-            onEdit={() => setEditing(card)}
-            editLabel={`Edit ${card.kanji}`}
             hint={{ pressed: showHint, onToggle: () => setShowHint((s) => !s) }}
             disabled={session.blocked}
           />

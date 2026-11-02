@@ -2,13 +2,14 @@ import type { Ref } from "react";
 import { toRomaji } from "wanakana";
 import type { KanjiCard, KanjiInfo, KanjiPromptPart } from "@/lib/types";
 import SentenceNote from "@/components/SentenceNote";
-import { kanjiChars } from "@/lib/kanji-deck";
+import { hideStudiedReadings, kanjiChars } from "@/lib/kanji-deck";
 import { promptTextSize, readingTextSize } from "@/lib/card-fit";
 import { cn } from "@/lib/utils";
 
 // The faces of a kanji-in-word card (Smart Kanji, All Kanji): "what reading
 // does THIS kanji take in this word?" The front carries furigana under the
-// word's kanji you turned off, so only the ones you study are tested.
+// word's kanji you don't study in any word, so only the ones you study are
+// tested.
 
 // `hinted` means this run carries furigana — i.e. none of its kanji are cards
 // of yours, so it's free context. Those sit a shade back from the unhinted grey
@@ -113,11 +114,17 @@ export function wordReadingOf(card: KanjiCard): string {
 export function KanjiInWordFront({
   id,
   card,
+  studied,
 }: {
   id: string;
   card: KanjiCard;
+  // Every kanji you study, in any word — never hinted.
+  studied: ReadonlySet<string>;
 }) {
-  const parts = promptParts(card.word, card.word_prompt_parts);
+  const parts = hideStudiedReadings(
+    promptParts(card.word, card.word_prompt_parts),
+    studied
+  );
   // Only a word that actually carries a hint gives up type size for the ruby.
   const furigana = parts.some((part) => part.reading);
   return (

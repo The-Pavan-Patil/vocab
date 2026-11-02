@@ -61,7 +61,9 @@ In both **Smart Kanji** and **All Kanji**, a turned-off kanji may still appear
 as context inside a selected kanji's source word. Its safe segment reading is
 shown as furigana under it so the prompt tests only the selected characters.
 For example, selecting only 食 in 食事 shows じ under 事; selecting both
-characters hides both readings. A compound is divided per kanji only when its
+characters hides both readings. A kanji you study in any word is never hinted:
+with 上 turned on in 上手, 上着 shows no reading under 上 even where 上 is
+turned off. A compound is divided per kanji only when its
 reading lines up with the kanji's dictionary readings in exactly one way; an
 unsplittable segment (今日 = きょう) mixing selected and unselected characters is
 left unhinted.

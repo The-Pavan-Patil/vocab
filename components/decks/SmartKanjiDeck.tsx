@@ -50,7 +50,7 @@ import {
 
 // The Smart Kanji deck: one kanji as it appears in one of your words, filtered
 // to a JLPT level (cumulative — N4 includes N5); furigana marks the word's
-// kanji you turned off. Its schedule is the card's base SRS columns
+// kanji you don't study in any word. Its schedule is the card's base SRS columns
 // (lib/decks.ts "smart-kanji"), with its own tuning.
 
 const parseLevel = (raw: string) => {
@@ -214,7 +214,19 @@ export default function SmartKanjiDeck({
 
       <SessionLine>{sessionLine}</SessionLine>
 
-      <DeckToolbar slowSave={session.slowSave} pendingCount={session.pendingCount}>
+      <DeckToolbar
+        slowSave={session.slowSave}
+        pendingCount={session.pendingCount}
+        edit={
+          cardWord
+            ? {
+                word: cardWord.kanji,
+                onEdit: () => setEditing(cardWord),
+                disabled: session.blocked,
+              }
+            : undefined
+        }
+      >
         <JlptLevelSelect
           value={level}
           onChange={changeLevel}
@@ -272,7 +284,11 @@ export default function SmartKanjiDeck({
             className="px-5 py-5 sm:px-6 sm:py-6"
           >
             {!flipped ? (
-              <KanjiInWordFront id={session.faceId} card={card} />
+              <KanjiInWordFront
+                id={session.faceId}
+                card={card}
+                studied={store.studied}
+              />
             ) : (
               <KanjiInWordBack
                 id={session.faceId}
@@ -303,8 +319,6 @@ export default function SmartKanjiDeck({
 
           <DeckActions
             onRestart={() => session.guardReset(session.restart)}
-            onEdit={cardWord ? () => setEditing(cardWord) : undefined}
-            editLabel={cardWord ? `Edit ${cardWord.kanji}` : undefined}
             disabled={session.blocked}
           />
         </>
