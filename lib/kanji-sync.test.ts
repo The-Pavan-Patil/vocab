@@ -115,6 +115,55 @@ test("uncurated words include graded kanji and skip ungraded kanji", async () =>
   ]);
 });
 
+test("a compound run is split per kanji so a turned-off kanji gets its own hint", async () => {
+  const readings: Record<string, string[]> = {
+    上: ["ジョウ", "ショウ", "うえ", "あ.げる"],
+    手: ["シュ", "ズ", "て", "-て"],
+  };
+  const rows = await buildDesiredKanjiCards(
+    db,
+    "u1",
+    [vocab({ kanji: "上手", english: "skilful", kanji_selection: ["上"] })],
+    {
+      getKanji: async (_supabase, character) => ({
+        ...info(character, character === "上" ? 5 : 4),
+        on: readings[character].filter((r) => /^[ァ-ヶ]/.test(r)),
+        kun: readings[character].filter((r) => !/^[ァ-ヶ]/.test(r)),
+      }),
+      // kuroshiro keeps the compound as one run.
+      segment: async () => [{ surface: "上手", reading: "じょうず", isKanji: true }],
+    }
+  );
+
+  assert.deepEqual(rows.map((row) => row.character), ["上"]);
+  assert.equal(rows[0].reading, "じょう");
+  assert.equal(rows[0].word_reading, "じょう.ず");
+  assert.deepEqual(rows[0].word_prompt_parts, [
+    { surface: "上", reading: null },
+    { surface: "手", reading: "ず" },
+  ]);
+});
+
+test("a failed lookup of a turned-off kanji leaves its run whole without failing the sync", async () => {
+  const rows = await buildDesiredKanjiCards(
+    db,
+    "u1",
+    [vocab({ kanji: "上手", kanji_selection: ["上"] })],
+    {
+      getKanji: async (_supabase, character) => {
+        if (character === "手") throw new Error("kanjiapi unreachable");
+        return { ...info(character, 5), on: ["ジョウ"] };
+      },
+      segment: async () => [{ surface: "上手", reading: "じょうず", isKanji: true }],
+    }
+  );
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].reading, null);
+  assert.equal(rows[0].word_reading, "じょうず");
+  assert.deepEqual(rows[0].word_prompt_parts, [{ surface: "上手", reading: null }]);
+});
+
 test("a transient segmentation failure leaves reading fields untouched", async () => {
   const rows = await buildDesiredKanjiCards(db, "u1", [vocab({})], {
     getKanji: async (_supabase, character) => info(character, 5),

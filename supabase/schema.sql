@@ -1,5 +1,5 @@
 -- Base bootstrap schema. Run this first, then apply 0002_auth_rls.sql through
--- 0011_vocab_sentence.sql in numeric order. Those migrations are the source of
+-- 0012_all_kanji_schedule.sql in numeric order. Those migrations are the source of
 -- truth for the authenticated study decks and current schema.
 
 create extension if not exists "pgcrypto"; -- for gen_random_uuid()

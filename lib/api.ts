@@ -3,11 +3,12 @@ import type {
   DictEntry,
   Grade,
   KanjiCard,
+  KanjiDeckData,
   KanjiInfo,
   Vocab,
   VocabInput,
 } from "./types";
-import type { StudyMode } from "./decks";
+import type { KanjiDeckParam, StudyMode } from "./decks";
 
 // Thin client-side fetch helpers used by the UI components.
 
@@ -119,14 +120,18 @@ export async function reviewVocab(
   return json.data as Vocab;
 }
 
-// --- Smart Kanji deck ---
+// --- Smart Kanji + All Kanji decks ---
 
-// The user's kanji-in-word cards (auto-populated from study_as_kanji words).
-export async function fetchKanjiCards(): Promise<KanjiCard[]> {
+// The user's kanji-in-word cards (auto-populated from study_as_kanji words),
+// with the kanji details their backs show.
+export async function fetchKanjiCards(): Promise<KanjiDeckData> {
   const res = await fetch("/api/kanji-cards", { cache: "no-store" });
   const json = await parseJson(res);
   ensureOk(res, json, "Failed to load kanji cards");
-  return (json.data as KanjiCard[]) ?? [];
+  return {
+    cards: (json.data as KanjiCard[]) ?? [],
+    kanji: (json.kanji as Record<string, KanjiInfo>) ?? {},
+  };
 }
 
 // Fully reconcile the smart deck from the user's current words/selections.
@@ -147,10 +152,12 @@ export async function syncKanjiCards(): Promise<{
   };
 }
 
+// Record a Smart Kanji ("smart") or All Kanji ("all") review — each deck keeps
+// its own schedule on the card.
 export async function reviewKanjiCard(
   id: string,
   grade: Grade,
-  opts: { reviewId: string; practice?: boolean }
+  opts: { reviewId: string; practice?: boolean; deck: KanjiDeckParam }
 ): Promise<KanjiCard> {
   const res = await fetch(`/api/kanji-cards/${id}/review`, {
     method: "POST",
@@ -159,6 +166,7 @@ export async function reviewKanjiCard(
       grade,
       practice: opts.practice ?? false,
       reviewId: opts.reviewId,
+      deck: opts.deck,
     }),
   });
   const json = await parseJson(res);

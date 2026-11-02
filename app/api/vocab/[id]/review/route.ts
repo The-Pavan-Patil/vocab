@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireReviewSession } from "@/lib/supabase/require-user";
-import { isEarly, schedule, KANJI_TUNING, WORD_TUNING, type Grade } from "@/lib/srs";
-import { readSrs, type StudyMode } from "@/lib/decks";
+import { isEarly, schedule, type Grade } from "@/lib/srs";
+import { DECK_TUNING, readSrs, vocabDeckFromMode } from "@/lib/decks";
 import { isReviewId } from "@/lib/review-command";
 
 export const runtime = "nodejs";
@@ -16,7 +16,8 @@ const GRADES: Grade[] = ["remember", "right", "wrong"];
 // Loads the card's current SRS state for the chosen deck (the server is the
 // single source of truth for intervals), computes + persists the next schedule
 // to that deck's columns, and appends a row to the reviews log. Returns the
-// updated card. `mode` selects the word track or the independent kanji track.
+// updated card. `mode` selects the Vocab deck ("word") or the Word Kanji deck
+// ("kanji") — two independent schedules on the same row (lib/decks.ts).
 export async function POST(request: Request, { params }: Params) {
   const auth = await requireReviewSession();
   if ("response" in auth) return auth.response;
@@ -53,8 +54,8 @@ export async function POST(request: Request, { params }: Params) {
   // the card really isn't due yet (checked below against the server clock).
   const practice = body.practice === true;
   // Which deck this review belongs to — picks the column set + tuning + log mode.
-  const mode: StudyMode = body.mode === "kanji" ? "kanji" : "word";
-  const tuning = mode === "kanji" ? KANJI_TUNING : WORD_TUNING;
+  const deck = vocabDeckFromMode(body.mode);
+  const mode = deck === "word-kanji" ? "kanji" : "word";
 
   // Fetch the full card row (RLS scopes this to the owner). We select * so the
   // practice path can return the unchanged card with all its display fields.
@@ -72,13 +73,13 @@ export async function POST(request: Request, { params }: Params) {
 
   const reviewedAt = Date.now();
 
-  // Read THIS deck's SRS state (kanji_* columns for the kanji deck), overlaying
+  // Read THIS deck's SRS state (kanji_* columns for Word Kanji), overlaying
   // sane defaults so a pre-migration / partially-populated row is treated as new.
-  const prev = readSrs(card, mode);
+  const prev = readSrs(card, deck);
 
   const applySchedule = !(practice && isEarly(prev, reviewedAt));
   const scheduled = applySchedule
-    ? schedule(prev, grade, reviewedAt, tuning)
+    ? schedule(prev, grade, reviewedAt, DECK_TUNING[deck])
     : {
         next: prev,
         log: {

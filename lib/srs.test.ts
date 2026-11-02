@@ -25,10 +25,13 @@ import {
   NEW_CARDS_PER_SESSION,
   SESSION_SIZE_OPTIONS,
   RELEARN_GAP,
-  WORD_TUNING,
-  KANJI_TUNING,
+  SM2_DEFAULTS,
   type SrsState,
 } from "./srs.ts";
+import { DECK_TUNING } from "./decks.ts";
+
+// The kanji decks' tuning (Word / Smart / All Kanji start from the same values).
+const KANJI_TUNING = DECK_TUNING["smart-kanji"];
 
 const DAY = 86_400_000;
 // A fixed "now" so nothing depends on the wall clock.
@@ -91,8 +94,8 @@ test("'right' trajectory compounds by ease after rep 2: 1 → 6 → 15 → 38 �
   assert.deepEqual(seen, [1, 6, 15, 38, 95]);
 });
 
-// --- Per-deck tuning (the Kanji track) -------------------------------------
-// The Kanji deck reuses schedule() with KANJI_TUNING — same math, more
+// --- Per-deck tuning (the Kanji decks) -------------------------------------
+// The kanji decks reuse schedule() with their own DECK_TUNING — same math, more
 // conservative constants: 1–2 day first steps, a 4-day second step, and a lower
 // 2.6 ease ceiling, so kanji come back sooner and grow more slowly.
 
@@ -120,14 +123,16 @@ test("KANJI_TUNING: ease is capped at the lower 2.6 ceiling", () => {
 
 test("intervals are capped before they can create unusable far-future dates", () => {
   const mature = reviewed({ interval_days: 30_000, reps: 20, ease: 2.7 });
-  const { next } = schedule(mature, "right", T, WORD_TUNING);
-  assert.equal(next.interval_days, WORD_TUNING.maxIntervalDays);
+  const { next } = schedule(mature, "right", T, DECK_TUNING.vocab);
+  assert.equal(next.interval_days, DECK_TUNING.vocab.maxIntervalDays);
   assert.ok(Number.isFinite(Date.parse(next.due_at!)));
 });
 
-test("schedule() with no tuning arg behaves exactly like WORD_TUNING (back-compat)", () => {
+test("schedule() with no tuning arg uses SM2_DEFAULTS — the Vocab deck's values", () => {
   const a = schedule(newState(), "remember", T);
-  const b = schedule(newState(), "remember", T, WORD_TUNING);
+  const b = schedule(newState(), "remember", T, SM2_DEFAULTS);
+  const c = schedule(newState(), "remember", T, DECK_TUNING.vocab);
+  assert.deepEqual(a.next, c.next);
   assert.deepEqual(a.next, b.next);
   assert.equal(a.next.interval_days, 2); // the word deck's first step is unchanged
 });

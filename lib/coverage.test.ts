@@ -6,7 +6,8 @@
 // worry is whether the rest are lost. They aren't — the cap DEFERS, it never
 // deletes. These tests pin that guarantee for both the vocab/kanji word decks
 // (buildSession) and the smart kanji deck (matchesLevel / kanjiChars). The exact
-// pass criteria are written out in docs/deck-coverage.md.
+// pass criteria are written out in docs/deck-coverage.md. All Kanji has its own
+// queue (buildAllKanjiQueue) with the same coverage guarantees — AC15–AC19.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -14,10 +15,12 @@ import { buildSession } from "./srs.ts";
 import {
   ALL_LEVELS,
   JLPT_LEVELS,
+  buildAllKanjiQueue,
   groupByKanji,
   kanjiChars,
   matchesLevel,
   refreshQueuedKanjiCards,
+  wordKanjiChars,
 } from "./kanji-deck.ts";
 
 const DAY = 86_400_000;
@@ -233,4 +236,83 @@ test("AC14: queue refresh removes cards that are no longer active", () => {
     ),
     [{ id: "active" }]
   );
+});
+
+// ===========================================================================
+// All Kanji — buildAllKanjiQueue (its own schedule, newest word first)
+// ===========================================================================
+
+type KCard = {
+  id: string;
+  character: string;
+  created_at: string;
+  due_at: string | null;
+};
+const kcard = (
+  id: string,
+  character: string,
+  createdDaysAgo: number,
+  dueDays: number | null = null // null = new; negative = overdue
+): KCard => ({
+  id,
+  character,
+  created_at: iso(T - createdDaysAgo * DAY),
+  due_at: dueDays == null ? null : iso(T + dueDays * DAY),
+});
+
+// AC15 — every due review appears, never capped; new cards are capped.
+test("AC15: All Kanji shows every due review and caps only new cards", () => {
+  const dues = Array.from({ length: 30 }, (_, i) => kcard(`d${i}`, "食", i, -1));
+  const news = Array.from({ length: 10 }, (_, i) => kcard(`n${i}`, "事", i));
+  const q = buildAllKanjiQueue([...dues, ...news], T, { newLimit: 4 });
+  assert.equal(q.filter((c) => c.due_at != null).length, 30);
+  assert.equal(q.filter((c) => c.due_at == null).length, 4);
+});
+
+// AC16 — new cards are picked NEWEST word first, and the cap defers, never
+// drops: draining sessions surfaces every new card exactly once.
+test("AC16: All Kanji introduces new cards newest first and drains them all", () => {
+  let pool = Array.from({ length: 7 }, (_, i) => kcard(`n${i}`, `字${i}`, i));
+  const firstSession = buildAllKanjiQueue(pool, T, { newLimit: 3 });
+  assert.deepEqual(firstSession.map((c) => c.id), ["n0", "n1", "n2"]); // newest = 0 days ago
+  const seen: string[] = [];
+  while (pool.some((c) => c.due_at == null)) {
+    const q = buildAllKanjiQueue(pool, T, { newLimit: 3 });
+    seen.push(...q.map((c) => c.id));
+    const studied = new Set(q.map((c) => c.id));
+    pool = pool.map((c) => (studied.has(c.id) ? { ...c, due_at: iso(T + 5 * DAY) } : c));
+  }
+  assert.equal(new Set(seen).size, 7);
+  assert.equal(seen.length, 7);
+});
+
+// AC17 — the queue reads newest word first, each kanji's words together.
+test("AC17: All Kanji orders newest word first, grouped by kanji", () => {
+  const cards = [
+    kcard("old食", "食", 9, -1),
+    kcard("mid事", "事", 5, -1),
+    kcard("new食", "食", 1),
+  ];
+  const q = buildAllKanjiQueue(cards, T, { newLimit: 10 });
+  // 食's newest word leads, its older word follows it, then 事.
+  assert.deepEqual(q.map((c) => c.id), ["new食", "old食", "mid事"]);
+});
+
+// AC18 — cards due later are deferred, not lost: cram brings them back.
+test("AC18: All Kanji leaves out future-due cards unless cramming", () => {
+  const cards = [kcard("later", "食", 2, 3), kcard("now", "事", 1, -1)];
+  assert.deepEqual(buildAllKanjiQueue(cards, T).map((c) => c.id), ["now"]);
+  assert.deepEqual(
+    buildAllKanjiQueue(cards, T, { cram: true }).map((c) => c.id),
+    ["now", "later"]
+  );
+});
+
+// AC19 — the details a card's back needs: every kanji of every source word.
+test("AC19: wordKanjiChars collects every kanji across the source words once", () => {
+  assert.deepEqual(
+    wordKanjiChars([{ word: "食べる" }, { word: "食事" }, { word: "ひらがな" }]),
+    ["食", "事"]
+  );
+  assert.deepEqual(wordKanjiChars([]), []);
 });

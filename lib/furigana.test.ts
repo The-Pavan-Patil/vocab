@@ -11,6 +11,8 @@ import {
   fullReading,
   dottedReading,
   singleKanjiReadings,
+  readingStems,
+  splitCompoundSegments,
   type FuriganaSegment,
 } from "./furigana.ts";
 
@@ -74,4 +76,85 @@ test("singleKanjiReadings maps only kanji that sit ALONE in their segment", () =
 test("plain kana with no ruby comes back as a single kana segment", () => {
   const segs: FuriganaSegment[] = parseFuriganaHtml("たべる");
   assert.deepEqual(segs, [{ surface: "たべる", reading: "たべる", isKanji: false }]);
+});
+
+// ---------------------------------------------------------------------------
+// splitCompoundSegments — kuroshiro keeps a compound as one run (上手=じょうず);
+// these readings are kanjiapi.dev's on + kun lists, as the sync passes them.
+// ---------------------------------------------------------------------------
+
+const READINGS: Record<string, string[]> = {
+  上: ["ジョウ", "ショウ", "シャン", "うえ", "-うえ", "うわ-", "かみ", "あ.げる"],
+  手: ["シュ", "ズ", "て", "て-", "-て", "た-"],
+  食: ["ショク", "ジキ", "く.う", "く.らう", "た.べる", "は.む"],
+  事: ["ジ", "ズ", "こと", "つか.う", "つか.える"],
+  学: ["ガク", "まな.ぶ"],
+  校: ["コウ", "キョウ"],
+  本: ["ホン", "もと"],
+  棚: ["ホウ", "たな", "-だな"],
+  一: ["イチ", "イツ", "ひと-", "ひと.つ"],
+  杯: ["ハイ", "さかずき"],
+  今: ["コン", "キン", "いま"],
+  日: ["ニチ", "ジツ", "ひ", "-び", "-か"],
+  大: ["ダイ", "タイ", "おお-", "おお.きい", "-おお.いに"],
+  人: ["ジン", "ニン", "ひと", "-り", "-と"],
+  下: ["カ", "ゲ", "した", "しも", "もと", "さ.げる", "くだ.る", "お.ろす"],
+};
+const readingsOf = (character: string) => READINGS[character] ?? [];
+
+/** One unsplit kanji run, as kuroshiro returns a compound. */
+const run = (surface: string, reading: string): FuriganaSegment[] => [
+  { surface, reading, isKanji: true },
+];
+const split = (surface: string, reading: string) =>
+  splitCompoundSegments(run(surface, reading), readingsOf).map(
+    (s) => `${s.surface}=${s.reading}`
+  );
+
+test("readingStems: hiragana stems without okurigana or affix markers", () => {
+  assert.deepEqual(readingStems(READINGS["上"]), [
+    "じょう",
+    "しょう",
+    "しゃん",
+    "うえ",
+    "うわ",
+    "かみ",
+    "あ",
+  ]);
+});
+
+test("splits a compound whose reading lines up with each kanji: 上手 → じょう + ず", () => {
+  assert.deepEqual(split("上手", "じょうず"), ["上=じょう", "手=ず"]);
+  assert.deepEqual(split("食事", "しょくじ"), ["食=しょく", "事=じ"]);
+});
+
+test("allows gemination before the last kanji: 学校 → がっ + こう, 一杯 → いっ + ぱい", () => {
+  assert.deepEqual(split("学校", "がっこう"), ["学=がっ", "校=こう"]);
+  assert.deepEqual(split("一杯", "いっぱい"), ["一=いっ", "杯=ぱい"]);
+});
+
+test("allows rendaku after the first kanji: 本棚 → ほん + だな", () => {
+  assert.deepEqual(split("本棚", "ほんだな"), ["本=ほん", "棚=だな"]);
+});
+
+test("keeps jukujikun whole: 今日, 大人, 下手", () => {
+  assert.deepEqual(split("今日", "きょう"), ["今日=きょう"]);
+  assert.deepEqual(split("大人", "おとな"), ["大人=おとな"]);
+  assert.deepEqual(split("下手", "へた"), ["下手=へた"]);
+});
+
+test("keeps a run whole when a kanji has no known readings", () => {
+  assert.deepEqual(split("上龍", "じょうりゅう"), ["上龍=じょうりゅう"]);
+});
+
+test("keeps a run whole when the reading lines up more than one way", () => {
+  const ambiguous = splitCompoundSegments(run("甲乙", "あいう"), (character) =>
+    character === "甲" ? ["あ", "あい"] : ["いう", "う"]
+  );
+  assert.deepEqual(ambiguous, run("甲乙", "あいう"));
+});
+
+test("leaves single-kanji and kana segments untouched", () => {
+  const segments = parseFuriganaHtml(TABERU);
+  assert.deepEqual(splitCompoundSegments(segments, readingsOf), segments);
 });

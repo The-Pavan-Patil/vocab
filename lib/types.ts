@@ -144,7 +144,7 @@ export type KanjiPromptPart = {
   reading: string | null;
 };
 
-// A smart-deck study item: one kanji as it appears in one of the user's words.
+// A Smart / All Kanji study item: one kanji as it appears in one of the user's words.
 export type KanjiCard = {
   id: string;
   character: string;
@@ -158,7 +158,7 @@ export type KanjiCard = {
   vocab_id: string;
   active: boolean;
   created_at: string;
-  // SRS state (base-named columns; scheduled by lib/srs.ts directly).
+  // Smart Kanji's SRS state (base-named columns; scheduled by lib/srs.ts directly).
   ease: number;
   interval_days: number;
   reps: number;
@@ -166,6 +166,22 @@ export type KanjiCard = {
   state: "new" | "review" | "relearning";
   due_at: string | null;
   last_reviewed_at: string | null;
+  // All Kanji's INDEPENDENT schedule on the same card (migration 0012). See
+  // lib/decks.ts — projectCard(card, "all-kanji") reads these.
+  all_ease: number;
+  all_interval_days: number;
+  all_reps: number;
+  all_lapses: number;
+  all_state: "new" | "review" | "relearning";
+  all_due_at: string | null;
+  all_last_reviewed_at: string | null;
+};
+
+// GET /api/kanji-cards: the cards plus kanjiapi details for every kanji in
+// their words, so a card's back renders without a request per kanji.
+export type KanjiDeckData = {
+  cards: KanjiCard[];
+  kanji: Record<string, KanjiInfo>;
 };
 
 export type DictDetails = {

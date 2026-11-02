@@ -2,8 +2,8 @@
 // Spaced-repetition scheduler.
 //
 // Pure, dependency-free, and ISOMORPHIC: imported by the server route handler
-// (`schedule`, the source of truth for intervals) AND by the client Flashcards
-// component (`buildSession`, `isDue`, the `Grade` type). Keep it free of any
+// (`schedule`, the source of truth for intervals) AND by the client study decks
+// (`buildSession`, `isDue`, the `Grade` type). Keep it free of any
 // node-only or browser-only imports so both sides can use it.
 //
 // Algorithm: SM-2 (SuperMemo 2) adapted for a THREE-grade input. Classic SM-2
@@ -49,10 +49,10 @@ export type SrsState = {
 // --- Tunable constants ------------------------------------------------------
 // These are the canonical SM-2 defaults, lightly adapted for three grades.
 // Changing them changes how aggressively gaps grow/shrink. They are gathered
-// into a `SrsTuning` object so a deck can be tuned INDEPENDENTLY (the Kanji deck
-// uses KANJI_TUNING; the word deck uses WORD_TUNING) while sharing one scheduler.
+// into a `SrsTuning` object so every deck is tuned INDEPENDENTLY while sharing
+// one scheduler: each deck's own tuning lives in DECK_TUNING (lib/decks.ts).
 
-export const EASE_DEFAULT = 2.5; // starting ease for a brand-new card (both decks)
+export const EASE_DEFAULT = 2.5; // starting ease for a brand-new card (every deck)
 
 /** The knobs that shape how one deck's intervals grow and shrink. */
 export type SrsTuning = {
@@ -64,8 +64,12 @@ export type SrsTuning = {
   maxIntervalDays: number; // hard ceiling — avoids unusable/invalid far-future dates
 };
 
-/** Word deck — the canonical SM-2 defaults (unchanged from before). */
-export const WORD_TUNING: SrsTuning = {
+/**
+ * The canonical SM-2 constants — schedule()'s default when no deck tuning is
+ * passed. No deck reads this object: each one has its own copy in DECK_TUNING,
+ * so retuning a deck never moves another deck's intervals.
+ */
+export const SM2_DEFAULTS: SrsTuning = {
   easeMin: 1.3,
   easeMax: 2.7,
   easeDelta: { remember: +0.1, right: 0.0, wrong: -0.2 },
@@ -73,22 +77,6 @@ export const WORD_TUNING: SrsTuning = {
   firstInterval: { remember: 2, right: 1 },
   secondInterval: 6,
   maxIntervalDays: 36_500,
-};
-
-/**
- * Kanji deck — recalling a reading + meaning from the bare glyph is harder, so
- * this is a deliberately MORE CONSERVATIVE starting point: shorter first gaps
- * and a lower ease ceiling, so kanji come back sooner and their gaps grow more
- * slowly. A confident front-side recall still earns a meaningful advantage over
- * a reveal-and-confirm pass.
- */
-export const KANJI_TUNING: SrsTuning = {
-  easeMin: 1.3,
-  easeMax: 2.6,
-  easeDelta: { remember: +0.1, right: 0.0, wrong: -0.2 },
-  firstInterval: { remember: 2, right: 1 },
-  secondInterval: 4,
-  maxIntervalDays: 18_250,
 };
 
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
@@ -124,15 +112,15 @@ export type ScheduleResult = { next: SrsState; log: ReviewLog };
  * @param prev   the card's current SRS state
  * @param grade  the user's signal for this review
  * @param now    current time in epoch ms (pass `Date.now()` at the call site)
- * @param tuning the deck's tuning (defaults to WORD_TUNING; pass KANJI_TUNING
- *               for the kanji deck). The math is identical — only the constants
- *               differ — so both decks share this one source of truth.
+ * @param tuning the deck's tuning (DECK_TUNING in lib/decks.ts; defaults to
+ *               SM2_DEFAULTS). The math is identical — only the constants
+ *               differ — so every deck shares this one source of truth.
  */
 export function schedule(
   prev: SrsState,
   grade: Grade,
   now: number,
-  tuning: SrsTuning = WORD_TUNING
+  tuning: SrsTuning = SM2_DEFAULTS
 ): ScheduleResult {
   let { ease, interval_days, reps, lapses } = prev;
   const interval_before = interval_days;

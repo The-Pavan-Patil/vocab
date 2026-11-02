@@ -444,9 +444,10 @@ const VocabRow = memo(function VocabRow({
           {v.kanji}
         </span>
         {/* Kanji-deck membership rides on the word (the column it used to
-            have was empty on most rows). Same icon as the Kanji tab. */}
+            have was empty on most rows). Same icon as the kanji decks' empty
+            states. */}
         {v.study_as_kanji && (
-          <span title="In the Kanji deck">
+          <span title="Also studied as Kanji">
             <Languages
               className="ml-1.5 inline-block size-3.5 align-[-0.1em] text-muted-foreground"
               role="img"

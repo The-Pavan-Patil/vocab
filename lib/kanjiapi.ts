@@ -74,7 +74,7 @@ export function normalizeKanji(
 }
 
 // A cached `kanji` row → KanjiInfo (jsonb columns arrive already parsed).
-function rowToInfo(row: Record<string, unknown>): KanjiInfo {
+export function rowToInfo(row: Record<string, unknown>): KanjiInfo {
   return {
     character: row.character as string,
     meanings: (row.meanings as string[]) ?? [],
@@ -86,6 +86,29 @@ function rowToInfo(row: Record<string, unknown>): KanjiInfo {
     heisig: (row.heisig_en as string | null) ?? null,
     words: (row.words as KanjiWord[]) ?? [],
   };
+}
+
+/**
+ * Read many kanji from the `kanji` cache table in ONE query, keyed by character.
+ * Cache-only — characters that were never looked up are simply absent (the
+ * client falls back to /api/kanji/[char] for those). Pass an RLS-scoped client.
+ */
+export async function getCachedKanji(
+  supabase: SupabaseClient,
+  characters: string[]
+): Promise<Record<string, KanjiInfo>> {
+  if (characters.length === 0) return {};
+  const { data, error } = await supabase
+    .from("kanji")
+    .select("*")
+    .in("character", characters);
+  if (error) throw new Error(error.message);
+  return Object.fromEntries(
+    (data ?? []).map((row) => {
+      const info = rowToInfo(row);
+      return [info.character, info];
+    })
+  );
 }
 
 /**

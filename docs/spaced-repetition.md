@@ -1,6 +1,7 @@
 # Spaced Repetition (Flashcards SRS)
 
-How the Flashcards tab decides **which card to show and when**. This document is
+How the four study decks (Vocab, Word Kanji, Smart Kanji, All Kanji) decide
+**which card to show and when**. This document is
 the design record: the *why* behind the algorithm and the grading model, plus
 the upgrade path, so future changes have full context.
 
@@ -111,12 +112,14 @@ interval = 0                                      // due immediately → reappea
 starts at 2 days and also raises ease. A `wrong` at any point resets it to
 immediate relearning and lowers the ease.
 
-Intervals are capped before calculating `due_at`: 36,500 days for word cards and
-18,250 days for Kanji cards. This keeps long-lived schedules within a usable date
-range instead of eventually producing invalid timestamps.
+Intervals are capped before calculating `due_at`: 36,500 days for Vocab cards and
+18,250 days for the three kanji decks. This keeps long-lived schedules within a
+usable date range instead of eventually producing invalid timestamps.
 
-All tunable constants live at the top of `lib/srs.ts` (`EASE_*`,
-`FIRST_INTERVAL`, `SECOND_INTERVAL`, `RELEARN_GAP`, `NEW_CARDS_PER_SESSION`).
+Each deck's interval constants are its own entry in `DECK_TUNING`
+(`lib/decks.ts`) — four separate objects, so retuning one deck never moves
+another. The session constants (`RELEARN_GAP`, `NEW_CARDS_PER_SESSION`,
+`SESSION_SIZE_OPTIONS`) live at the top of `lib/srs.ts`.
 
 ### Two timescales of "frequency"
 
@@ -124,7 +127,7 @@ All tunable constants live at the top of `lib/srs.ts` (`EASE_*`,
 
 1. **Within a session (minutes).** A `wrong` card is re-inserted `RELEARN_GAP`
    (5) cards later in the live queue, so it's drilled until it sticks this
-   sitting. (Handled in the component via `buildSession` + requeue.)
+   sitting. (Handled by `hooks/use-study-session.ts`, shared by every deck.)
 2. **Across days.** `due_at` schedules the real next review.
 
 `buildSession()` builds the queue: every overdue review (most overdue first),
@@ -155,8 +158,10 @@ never *blocks* a real review.
 (overdue reviews are never capped — you should always clear what you've already
 learned). A selector beside the category picker chooses the batch size —
 **20 / 50 / 100 / All** (`SESSION_SIZE_OPTIONS`) — defaulting to
-`NEW_CARDS_PER_SESSION` (100) and persisted per browser in `localStorage`
-(`vocab:sessionSize`; "All" = no cap). It stays a *soft* cap: the UI surfaces an
+`NEW_CARDS_PER_SESSION` (100) and persisted per browser and per deck in
+`localStorage` (`vocab:sessionSize:word`, `vocab:sessionSize:kanji`,
+`kanji:sessionSize`, `kanji:all:sessionSize`; "All" = no cap). It stays a *soft*
+cap: every deck surfaces an
 **"Add N more"** action mid-session and a **"Study N more"** button on the
 completion screen, both of which append the next (oldest-added) batch of new
 cards to the live queue without resetting the running tally.
@@ -166,12 +171,12 @@ cards to the live queue without resetting the running tally.
 ## 4. Data model & flow
 
 ```
-components/Flashcards.tsx ──FIFO outbox──▶ POST /api/vocab/[id]/review
-  { reviewId, grade, practice } ──▶
+components/decks/VocabDeck.tsx ── hooks/use-study-session.ts ──FIFO outbox──▶
+  POST /api/vocab/[id]/review { reviewId, grade, practice, mode } ──▶
   app/api/vocab/[id]/review/route.ts
      ├─ load card SRS state (RLS-scoped)
      ├─ if (practice && isEarly): keep the schedule unchanged
-     ├─ else schedule(prev, grade, now)    ← lib/srs.ts (source of truth)
+     ├─ else schedule(prev, grade, now, DECK_TUNING[deck])  ← lib/srs.ts (source of truth)
      └─ RPC commit_vocab_review
           ├─ lock + reject stale concurrent reviews
           ├─ UPDATE the selected schedule
@@ -205,60 +210,69 @@ components/Flashcards.tsx ──FIFO outbox──▶ POST /api/vocab/[id]/review
 | `app/api/vocab/[id]/review/route.ts`      | Records a review, persists the new schedule       |
 | `lib/api.ts` → `reviewVocab()`            | Client fetch helper                               |
 | `lib/review-outbox.ts`                    | Bounded sequential persistence queue              |
-| `components/Flashcards.tsx`               | Study UI: grading, session queue, recap           |
+| `hooks/use-study-session.ts`              | Shared mechanics: queue, grading, saves, keyboard |
+| `components/decks/*Deck.tsx`              | One file per deck: its cards, queue, settings     |
+| `components/study/*`                      | Shared study UI: card, grade buttons, end screen  |
 | `lib/types.ts` → `Vocab`, `Grade`         | SRS fields on the row + grade type                |
-| `lib/decks.ts`                            | Deck ↔ column adapter (word vs kanji track)       |
+| `lib/decks.ts`                            | Deck registry: each deck's columns + tuning       |
 | `supabase/0004_kanji.sql`                 | `study_as_kanji` + `kanji_*` cols + `reviews.mode`|
 | `supabase/0008_atomic_reviews.sql`        | Transactional schedule + history commit RPCs      |
 | `supabase/0009_review_outbox.sql`         | Idempotent IDs for safe review retries            |
 
 ---
 
-## 4a. The Kanji deck — one word, two cards
+## 4a. The Word Kanji deck — one word, two cards
 
-A word can be studied two ways at once, each with its **own independent
-schedule**:
+The **Flashcards** section holds two decks over the same words, each with its
+**own independent schedule**:
 
-- **Word deck** (the Flashcards tab): front shows the kanji **and** the reading
-  (romaji); you recall the English. Uses the base SRS columns + `WORD_TUNING`.
-- **Kanji deck** (the Kanji tab): front shows **only the kanji**; flipping
-  reveals the reading **and** the meaning. Uses the parallel `kanji_*` columns +
-  `KANJI_TUNING`.
+- **Vocab**: front shows the kanji **and** the reading (romaji); you recall the
+  English. Uses the base SRS columns + `DECK_TUNING.vocab`.
+- **Word Kanji**: front shows **only the kanji**; flipping reveals the reading
+  **and** the meaning. Uses the parallel `kanji_*` columns +
+  `DECK_TUNING["word-kanji"]`.
 
 A word opts in via the **`study_as_kanji`** flag — a "Also study as Kanji"
 toggle on the Add form, the Dictionary add dialog, the List-tab edit row, and a
 batch toggle on Import. A toggled word then appears in **both** decks; grading it
 in one never moves the other's schedule.
 
-**Same algorithm, per-deck tuning.** Both decks call the *same* `schedule()`;
-only the constants differ. `KANJI_TUNING` is deliberately more conservative
-(1 day after reveal-and-confirm, 2 days after confident recall, a 4-day second
-step, and ease ceiling 2.6) because recalling a
-reading + meaning from the bare glyph is harder, so kanji come back sooner and
-their gaps grow more slowly. The tuning is an optional, defaulted parameter
-(`schedule(prev, grade, now, tuning = WORD_TUNING)`), so the word path is
-byte-for-byte unchanged.
+**Same algorithm, per-deck tuning.** Every deck calls the *same* `schedule()`;
+only its own constants differ. The kanji decks start deliberately more
+conservative (1 day after reveal-and-confirm, 2 days after confident recall, a
+4-day second step, and ease ceiling 2.6) because recalling a reading + meaning
+from the bare glyph is harder, so kanji come back sooner and their gaps grow more
+slowly. Each deck's tuning is a separate object, so it can be changed alone.
 
-**How the code stays DRY.** `lib/decks.ts` is the single adapter between a deck
-and its columns: `readSrs`/`writeSrs` map a row's `kanji_*` columns to/from the
-base SRS field names, and `deckCard(v, "kanji")` *projects* a row so the generic
-`buildSession`/`isDue`/`isEarly`/`nextDueAt` helpers — and the whole Flashcards
-component — work on the kanji schedule **unchanged**. `created_at` is shared, so
-new-card ordering (oldest-first) is identical across decks. The review route
-takes a `mode`, picks the column set + tuning, and stamps `reviews.mode`. The
-session-size selector remembers its choice per deck (`vocab:sessionSize:<mode>`),
-so you can run 100 kanji/session independently of words.
+**How the code is split.** `lib/decks.ts` is the registry between a deck and its
+columns: `readSrs`/`writeSrs` map a deck's columns to/from the base SRS field
+names, and `projectCard(row, deck)` *projects* a row so the generic
+`buildSession`/`isDue`/`isEarly`/`nextDueAt` helpers read that deck's schedule
+**unchanged**. Each deck is its own component (`components/decks/`) owning its
+cards, queue rules, settings and faces; they share the study UI
+(`components/study/`) and the mechanics hook (`hooks/use-study-session.ts`).
+The review route takes a `mode`, picks the column set + tuning, and stamps
+`reviews.mode`. Category and session size are remembered per deck.
 
 ---
 
-## 4b. The Smart Kanji deck — kanji-in-word, JLPT-bucketed
+## 4b. The Smart Kanji section — kanji-in-word decks
 
-A second, "smart" kanji deck driven by the **same** `study_as_kanji` toggle. Its
-study item is a single kanji **in the context of one word**, testing that kanji's
-reading there: 食/食べる→た and 食/食事→しょく are two separate cards, grouped
-under 食 and filtered by an **active JLPT level**. The level is **cumulative** —
-selecting N4 includes N5 + N4 (every level that easy or easier) — plus an **All**
-option to revise every kanji at once.
+The **Smart Kanji** section holds two decks driven by the **same**
+`study_as_kanji` toggle. Their study item is a single kanji **in the context of
+one word**, testing that kanji's reading there: 食/食べる→た and 食/食事→しょく
+are two separate cards, grouped under 食.
+
+- **Smart Kanji** filters by an **active JLPT level**. The level is
+  **cumulative** — selecting N4 includes N5 + N4 (every level that easy or
+  easier) — plus an **All** option. Uses the card's base SRS columns, with
+  furigana under the word's turned-off kanji.
+- **All Kanji** studies every card, newest word first with each kanji's words
+  grouped (`buildAllKanjiQueue`), with furigana under the word's turned-off kanji.
+  It has its **own independent schedule** — the card's `all_*` columns
+  (`0012_all_kanji_schedule.sql`), logged as `kanji_all` — so grading a card
+  here never moves its Smart Kanji due date. It started fresh: every card was
+  new to it.
 
 ```
 add 食べる (toggle on) ──▶ POST /api/kanji-cards/sync
@@ -266,7 +280,8 @@ add 食べる (toggle on) ──▶ POST /api/kanji-cards/sync
   ├─ segment(食べる) ── kuroshiro furigana ──▶ 食 = た
   └─ reconcile kanji_cards { vocab_id, character:食, word:食べる, reading:た, … }
 
-Smart Kanji tab ─ JLPT selector (cumulative N5…N1 + All) ─ buildSession(cards.filter(jlpt>=level)) ─ schedule(KANJI_TUNING)
+Smart Kanji ─ JLPT selector (cumulative N5…N1 + All) ─ buildSession(cards.filter(jlpt>=level)) ─ schedule(DECK_TUNING["smart-kanji"])
+All Kanji   ─ projectCard(card, "all-kanji") ─ buildAllKanjiQueue(cards) ─ schedule(DECK_TUNING["all-kanji"])
 ```
 
 - **Data.** `kanji` (global reference cache from kanjiapi.dev: readings, `jlpt`,
@@ -274,21 +289,34 @@ Smart Kanji tab ─ JLPT selector (cumulative N5…N1 + All) ─ buildSession(ca
   schedules them directly; `jlpt` denormalized for the level filter). `reviews`
   gains `kanji_card_id` and the `kanji_char` mode. See `supabase/0005_kanji_smart.sql`.
 - **Reading-in-word** comes from `lib/furigana.ts` (kuroshiro furigana), parsed by
-  `parseFuriganaHtml`. Best-effort: jukujikun (今日=きょう) stay an unsplit run, so
+  `parseFuriganaHtml`. kuroshiro keeps a kanji compound as one run (上手=じょうず),
+  so `splitCompoundSegments` divides it per kanji when the reading lines up with
+  the kanji's kanjiapi on/kun readings in exactly one way, allowing rendaku
+  (本棚 = ほん + だな) and gemination (学校 = がっ + こう): 上手 → 上=じょう, 手=ず.
+  Best-effort: jukujikun (今日=きょう, 大人=おとな) stay an unsplit run, so
   no wrong per-character reading is invented — the card falls back to the word
   reading.
 - **Selection is explicit when curated.** The picker defaults JLPT-graded kanji
   on and ungraded kanji off. Once the user saves an array, exactly those kanji
   become active cards; explicitly selected ungraded kanji are allowed and appear
-  under **All levels**. In **All Kanjis**, ordered `word_prompt_parts` show
-  furigana above segments made entirely from turned-off kanji, while selected
-  kanji remain unhinted. Mixed unsplittable segments remain unhinted rather than
-  displaying a guessed partial reading. The JLPT Smart Kanji prompt is unchanged.
+  under **All levels**. In both decks, ordered `word_prompt_parts` show
+  furigana under segments made entirely from turned-off kanji, while selected
+  kanji remain unhinted — whatever JLPT level Smart Kanji is filtered to, the
+  toggle alone decides. Mixed unsplittable segments remain unhinted rather than
+  displaying a guessed partial reading. Parts are written at sync time, so a
+  word synced before the compound split keeps its old parts until it is edited
+  or a full sync (`POST /api/kanji-cards/sync`) runs.
 - **Population is automatic + lossless.** `lib/kanji-sync.ts` reconciles after
-  create/edit/toggle operations and performs a full backfill on first deck load.
+  create/edit/toggle/import operations. Opening a deck no longer runs a full
+  reconciliation (it made the decks slow to open); a failed sync's warning toast
+  offers **Retry**, which runs the full one (`POST /api/kanji-cards/sync`).
   Card identity is `(user, vocab_id, character)`, so word/meaning/reading metadata
   can change without resetting SRS state. Deselected cards become inactive rather
   than being deleted; reselecting restores the same schedule.
+- **Loaded once.** The section fetches the cards once (`hooks/use-kanji-cards.ts`)
+  and both decks share them; `GET /api/kanji-cards` also returns the cached
+  details of every kanji in the cards' words, so a card's back needs no request
+  per kanji. It refetches only after the user's words change.
 - **Live sessions are stable.** Server refreshes replace card data inside the
   current queue without rebuilding its order, progress, or forgotten-card repeats.
 - **kanjiapi.dev** (no key, KANJIDIC2/JMdict) also replaces Jisho for the
@@ -305,20 +333,24 @@ Smart Kanji tab ─ JLPT selector (cumulative N5…N1 + All) ─ buildSession(ca
 | `supabase/0007_kanji_reconciliation.sql` | Stable card identity + inactive-card history preservation |
 | `supabase/0008_atomic_reviews.sql` | Atomic Smart Kanji review commits |
 | `supabase/0009_review_outbox.sql` | Idempotent review commands and safe retries |
-| `supabase/0010_kanji_prompt_hints.sql` | Safe All Kanjis furigana prompt metadata |
+| `supabase/0010_kanji_prompt_hints.sql` | Safe furigana prompt metadata for turned-off kanji |
+| `supabase/0011_vocab_sentence.sql` | Per-word example sentence, copied onto cards |
+| `supabase/0012_all_kanji_schedule.sql` | All Kanji's independent `all_*` schedule + `kanji_all` mode |
 | `lib/kanjiapi.ts` | kanjiapi.dev fetch + normalize + DB cache |
 | `lib/furigana.ts` | kuroshiro furigana → per-kanji reading |
 | `lib/kanji-sync.ts` | Desired selections ↔ active/inactive `kanji_cards` reconciliation |
 | `app/api/kanji/[char]/route.ts` | cached kanji lookup |
 | `app/api/kanji-cards/{route,sync,[id]/review}.ts` | list · reconcile · review |
-| `components/SmartKanjiDeck.tsx` | study UI + JLPT selector |
+| `hooks/use-kanji-cards.ts` | the section's one fetch of cards + kanji details |
+| `components/SmartKanjiSection.tsx` | the section: Smart Kanji / All Kanji |
+| `components/decks/{SmartKanji,AllKanji}Deck.tsx` | each deck's queue, schedule, settings |
 
 ---
 
 ## 5. To enable it
 
 After `0002_auth_rls.sql`, run `0003_srs.sql` through
-`0010_kanji_prompt_hints.sql` in numeric order. Existing cards keep their schedules;
+`0012_all_kanji_schedule.sql` in numeric order. Existing cards keep their schedules;
 `0007` consolidates any legacy rename duplicates by keeping the most recently
 reviewed/mature schedule and reattaching the merged review history. Words remain outside Kanji decks until
 `study_as_kanji` is enabled.
@@ -332,7 +364,7 @@ reviewed/mature schedule and reattaching the merged review history. Words remain
   the scheduler is isolated behind one function. This is the main reason the
   `reviews` table (with `elapsed_days`, interval/ease snapshots) exists now.
 - **Per-user settings.** The new-card batch size is now a per-browser selector
-  (`localStorage`, `vocab:sessionSize:<mode>` / `kanji:sessionSize`); target retention and learning steps are
+  (`localStorage`, one key per deck); target retention and learning steps are
   still constants. A server-side settings table would sync these across devices.
 - **Stats view.** Retention %, streaks, and "cards maturing" all derive from the
   `reviews` log.

@@ -313,6 +313,10 @@ export default function DictionarySearch({
             name="q"
             aria-label="Search the dictionary"
             autoComplete="off"
+            // Romaji must reach Jisho lowercase and as typed — a phone's
+            // auto-capital or autocorrect turns "taberu" into a miss.
+            autoCapitalize="none"
+            autoCorrect="off"
             spellCheck={false}
             enterKeyHint="search"
             value={query}
@@ -694,7 +698,8 @@ export default function DictionarySearch({
                         Also study as Kanji
                       </FieldTitle>
                       <FieldDescription id="d-study-kanji-desc">
-                        Adds a kanji-only card to the Kanji tab.
+                        Adds a kanji-only card to Flashcards → Word Kanji, and
+                        its kanji to Smart Kanji.
                       </FieldDescription>
                     </FieldContent>
                     <Switch

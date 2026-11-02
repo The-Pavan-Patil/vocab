@@ -8,7 +8,7 @@ tests in [`lib/coverage.test.ts`](../lib/coverage.test.ts) check.
 
 ---
 
-## 1. The word decks (Vocab + the word-level Kanji deck)
+## 1. The word decks (Flashcards → Vocab + Word Kanji)
 
 Both run through `buildSession()` in [`lib/srs.ts`](../lib/srs.ts). Given your
 cards and "now", it returns the ordered queue for this sitting:
@@ -42,10 +42,10 @@ be buried behind newer ones.)
 
 ---
 
-## 2. The Smart Kanji deck (kanji-in-word)
+## 2. The kanji-in-word decks (Smart Kanji → Smart Kanji + All Kanji)
 
-When you add a word with **Also study as Kanji** on, the smart deck is built in
-two coverage-critical steps (see [`lib/kanji-sync.ts`](../lib/kanji-sync.ts)):
+When you add a word with **Also study as Kanji** on, its kanji cards are built in
+three coverage-critical steps (see [`lib/kanji-sync.ts`](../lib/kanji-sync.ts)):
 
 1. **Extract every kanji of the word** — `kanjiChars()` in
    [`lib/kanji-deck.ts`](../lib/kanji-deck.ts) returns each unique CJK character
@@ -57,11 +57,14 @@ two coverage-critical steps (see [`lib/kanji-sync.ts`](../lib/kanji-sync.ts)):
    deselected cards remain stored but inactive so reselecting restores their SRS
    schedule.
 
-In **All Kanjis**, a turned-off kanji may still appear as context inside a
-selected kanji's source word. Its safe segment reading is shown as furigana so
-the prompt tests only the selected characters. For example, selecting only 食 in
-食事 shows じ above 事; selecting both characters hides both readings. An
-unsplittable segment mixing selected and unselected characters is left unhinted.
+In both **Smart Kanji** and **All Kanji**, a turned-off kanji may still appear
+as context inside a selected kanji's source word. Its safe segment reading is
+shown as furigana under it so the prompt tests only the selected characters.
+For example, selecting only 食 in 食事 shows じ under 事; selecting both
+characters hides both readings. A compound is divided per kanji only when its
+reading lines up with the kanji's dictionary readings in exactly one way; an
+unsplittable segment (今日 = きょう) mixing selected and unselected characters is
+left unhinted.
 
 At study time the deck is filtered by an **active JLPT level**, which is
 **cumulative** (`matchesLevel()`):
@@ -87,6 +90,19 @@ Active level All → shows everything.
 
 Every active graded kanji is reachable at its own level, any harder cumulative
 selection, or **All**. Active ungraded selections are reachable through **All**.
+
+### All Kanji — its own schedule, newest word first
+
+**All Kanji** studies the same cards with no level filter, on its **own**
+schedule (the card's `all_*` columns), so what's due there is independent of
+Smart Kanji. `buildAllKanjiQueue()` in
+[`lib/kanji-deck.ts`](../lib/kanji-deck.ts) keeps the same guarantees as
+`buildSession()` — every due review (never capped), then up to the session size
+of new cards, future-due cards deferred — with two differences: new cards are
+picked **newest word first**, and the queue is ordered newest word first with
+each kanji's words grouped together. Because new cards come newest first, an old
+unstudied card waits behind words you add later; it's deferred, not dropped —
+the cap drains every new card across sessions.
 
 ---
 
@@ -115,6 +131,16 @@ passes iff:
 | AC9 | **Every kanji of a word is extracted** (de-duplicated, first-seen order); kana/latin add nothing. |
 | AC13 | Refreshing server card data preserves the live queue order and relearning duplicates. |
 | AC14 | Cards that become inactive are removed from the queue without restarting it. |
+
+**All Kanji — `buildAllKanjiQueue()` / `wordKanjiChars()`**
+
+| ID | Criterion |
+| -- | --------- |
+| AC15 | **Every due review appears**; only new cards are capped. |
+| AC16 | New cards are introduced **newest word first**, and draining sessions surfaces **every** new card exactly once. |
+| AC17 | The queue is ordered newest word first, **grouped by kanji**. |
+| AC18 | Future-due cards are **deferred, not lost** — absent normally, present under cram. |
+| AC19 | Every kanji across the cards' source words is collected once (the back-face details). |
 
 Run them with:
 

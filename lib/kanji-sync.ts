@@ -12,6 +12,7 @@ import {
   segment,
   dottedReading,
   singleKanjiReadings,
+  splitCompoundSegments,
   type FuriganaSegment,
 } from "./furigana.ts";
 
@@ -132,9 +133,27 @@ export async function buildDesiredKanjiCards(
       // Preserve previously-synced reading fields when analysis temporarily
       // fails. New rows simply receive the database's null defaults.
     }
+    const infos = await Promise.all(characters.map(loadInfo));
+    if (segments) {
+      // The analyzer keeps a compound as one run (上手 = じょうず); split it per
+      // kanji where the dictionary readings line up, so a turned-off kanji gets
+      // its own hint. Every kanji of the word is looked up for this, but only
+      // as a best effort: a failed lookup just leaves its run whole.
+      const readingInfos = new Map(
+        await Promise.all(
+          kanjiChars(word.kanji).map(
+            async (character) =>
+              [character, await loadInfo(character).catch(() => null)] as const
+          )
+        )
+      );
+      segments = splitCompoundSegments(segments, (character) => {
+        const info = readingInfos.get(character);
+        return info ? [...info.on, ...info.kun] : [];
+      });
+    }
     const wordReading = segments ? dottedReading(segments) || null : null;
     const readings = segments ? singleKanjiReadings(segments) : null;
-    const infos = await Promise.all(characters.map(loadInfo));
     const promptSelectedCharacters = explicit
       ? characters
       : characters.filter((_, index) => infos[index]?.jlpt != null);

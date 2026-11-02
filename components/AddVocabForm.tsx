@@ -247,8 +247,9 @@ export default function AddVocabForm({
                       Also study as Kanji
                     </FieldTitle>
                     <FieldDescription id="study_as_kanji-desc">
-                      Adds a kanji-only card (no reading shown) to the Kanji tab,
-                      with its own review schedule.
+                      Adds a kanji-only card (no reading shown) to Flashcards →
+                      Word Kanji, and its kanji to Smart Kanji, each with its
+                      own review schedule.
                     </FieldDescription>
                   </FieldContent>
                   {/* Named by the title alone (the wrapping label would read

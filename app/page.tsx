@@ -4,11 +4,10 @@ import {
   Activity,
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
 } from "react";
-import { PencilLine, Layers, Languages, List, Sparkles, Upload, BookOpen } from "lucide-react";
+import { PencilLine, Layers, List, Sparkles, Upload, BookOpen } from "lucide-react";
 import { Tabs as TabsPrimitive } from "radix-ui";
 import { TabsContent } from "@/components/ui/tabs";
 import {
@@ -20,9 +19,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import AddVocabForm from "@/components/AddVocabForm";
-import Flashcards from "@/components/Flashcards";
-import KanjiTab from "@/components/KanjiTab";
-import SmartKanjiDeck from "@/components/SmartKanjiDeck";
+import FlashcardsSection from "@/components/FlashcardsSection";
+import SmartKanjiSection from "@/components/SmartKanjiSection";
 import VocabTable from "@/components/VocabTable";
 import ImportPanel from "@/components/ImportPanel";
 import DictionarySearch from "@/components/DictionarySearch";
@@ -34,7 +32,6 @@ import {
   useHydrated,
   useSearchParam,
 } from "@/hooks/use-search-param";
-import { deckCard } from "@/lib/decks";
 import type { Vocab, VocabLoadState } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -42,13 +39,22 @@ const TABS = [
   { value: "dictionary", label: "Dictionary", short: "Dict", icon: BookOpen },
   { value: "add", label: "Add", short: "Add", icon: PencilLine },
   { value: "flashcards", label: "Flashcards", short: "Cards", icon: Layers },
-  { value: "kanji", label: "Kanji", short: "Kanji", icon: Languages },
   { value: "smart-kanji", label: "Smart Kanji", short: "Smart", icon: Sparkles },
   { value: "list", label: "List", short: "List", icon: List },
   { value: "import", label: "Import", short: "Import", icon: Upload },
 ];
 
 const DEFAULT_TAB = "dictionary";
+
+// Links from before the Kanji tab was split up: its Word Kanji deck now lives
+// in Flashcards, its All Kanji deck in Smart Kanji.
+function legacyKanjiTab(
+  view: string | null
+): Record<string, string | null> & { tab: string } {
+  return view === "all"
+    ? { tab: "smart-kanji", smart: "all", view: null }
+    : { tab: "flashcards", cards: "word-kanji", view: null };
+}
 
 // Thousands grouping in the reader's locale ("1,240 words").
 const WORD_COUNT = new Intl.NumberFormat();
@@ -91,7 +97,13 @@ export default function Home() {
   // The active tab lives in the URL (?tab=list), so reload, Back/Forward and
   // shared links all land on the same tab. Each switch is a history entry.
   const tabParam = useSearchParam("tab");
-  const tab = TABS.some((t) => t.value === tabParam) ? tabParam! : DEFAULT_TAB;
+  const viewParam = useSearchParam("view");
+  const tab =
+    tabParam === "kanji"
+      ? legacyKanjiTab(viewParam).tab
+      : TABS.some((t) => t.value === tabParam)
+        ? tabParam!
+        : DEFAULT_TAB;
   // The URL can't be read on the server, so the prerendered HTML and the
   // hydration pass don't know the tab yet. Show no panel until they do, rather
   // than flashing Dictionary on a ?tab=list load.
@@ -99,11 +111,20 @@ export default function Home() {
   const setTab = useCallback((next: string) => {
     setSearchParams({ tab: next === DEFAULT_TAB ? null : next }, { push: true });
   }, []);
+  // Rewrite an old ?tab=kanji link in place (the render above already shows
+  // the right section), so the URL names the deck it lands on.
+  useEffect(() => {
+    if (tabParam === "kanji") setSearchParams(legacyKanjiTab(viewParam));
+  }, [tabParam, viewParam]);
   const [vocab, setVocab] = useState<Vocab[]>([]);
   // When `vocab` was fetched. A deck kept alive by <Activity> may have started
   // its session hours ago; a reload rebuilds its queue against this clock so
   // cards that came due in the meantime are included.
   const [loadedAt, setLoadedAt] = useState(0);
+  // Bumped whenever the words change after the first load (a reload, or an
+  // edit made inside a deck). The server re-syncs a word's kanji cards on every
+  // change, so the Smart Kanji section refetches its cards when this moves.
+  const [wordsVersion, setWordsVersion] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
@@ -132,6 +153,7 @@ export default function Home() {
       const data = await fetchVocab();
       setVocab(data);
       setLoadedAt(Date.now());
+      setWordsVersion((n) => n + 1);
       setError(null);
       return true;
     } catch (e) {
@@ -169,20 +191,14 @@ export default function Home() {
     };
   }, []);
 
-  // The Kanji deck: words opted in via `study_as_kanji`, projected so Flashcards
-  // reads each card's independent kanji_* schedule.
-  const kanjiVocab = useMemo(
-    () => vocab.filter((v) => v.study_as_kanji).map((v) => deckCard(v, "kanji")),
-    [vocab]
-  );
-
   // A word edited from inside a study session. Patching the one row (instead of
-  // refetching) keeps every deck's in-progress session intact — Flashcards
-  // swaps the card in place when the list's membership hasn't changed.
+  // refetching) keeps every deck's in-progress session intact — a deck swaps
+  // the card in place when the list's membership hasn't changed.
   const applyVocabUpdate = useCallback((updated: Vocab) => {
     setVocab((current) =>
       current.map((word) => (word.id === updated.id ? updated : word))
     );
+    setWordsVersion((n) => n + 1);
   }, []);
 
   const revealWordInList = useCallback((word: string) => {
@@ -212,7 +228,7 @@ export default function Home() {
       </a>
 
       {/* Desktop: a labelled sidebar on the page ground, one hairline from
-          the canvas — the product and its scope at the top, the seven
+          the canvas — the product and its scope at the top, the six
           sections, the account at the foot. Each screen names itself in its
           own h1, so the brand here is a wordmark, not a heading. Below lg the
           top bar and the bottom nav take over. */}
@@ -302,29 +318,18 @@ export default function Home() {
             />
           </Panel>
           <Panel value="flashcards" tab={tab} hydrated={hydrated}>
-            <Flashcards
+            <FlashcardsSection
               vocab={vocab}
-              heading="Flashcards"
               loadState={loadState}
               loadedAt={loadedAt}
-              onVocabChanged={applyVocabUpdate}
-            />
-          </Panel>
-          <Panel value="kanji" tab={tab} hydrated={hydrated}>
-            <KanjiTab
-              vocab={vocab}
-              kanjiVocab={kanjiVocab}
-              loadState={loadState}
-              loadedAt={loadedAt}
-              active={tab === "kanji"}
               onVocabChanged={applyVocabUpdate}
             />
           </Panel>
           <Panel value="smart-kanji" tab={tab} hydrated={hydrated}>
-            <SmartKanjiDeck
-              heading="Smart Kanji"
-              active={tab === "smart-kanji"}
+            <SmartKanjiSection
+              active={hydrated && tab === "smart-kanji"}
               vocab={vocab}
+              wordsVersion={wordsVersion}
               onVocabChanged={applyVocabUpdate}
             />
           </Panel>
@@ -348,7 +353,7 @@ export default function Home() {
         aria-label="Sections"
         className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-background px-2 pb-[env(safe-area-inset-bottom)] lg:hidden"
       >
-        <ul className="grid grid-cols-7">
+        <ul className="grid grid-cols-6">
           {TABS.map((t) => {
             const active = tab === t.value;
             return (

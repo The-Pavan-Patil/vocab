@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireReviewSession } from "@/lib/supabase/require-user";
-import { isEarly, schedule, KANJI_TUNING, type Grade } from "@/lib/srs";
-import { readSrs } from "@/lib/decks";
+import { isEarly, schedule, type Grade } from "@/lib/srs";
+import { DECK_TUNING, kanjiDeckFromParam, readSrs } from "@/lib/decks";
 import { isReviewId } from "@/lib/review-command";
 
 export const runtime = "nodejs";
@@ -10,16 +10,22 @@ type Params = { params: Promise<{ id: string }> };
 
 const GRADES: Grade[] = ["remember", "right", "wrong"];
 
-// POST /api/kanji-cards/[id]/review — record a smart-deck (kanji-in-word) review.
-// Body: { reviewId, grade, practice? }. Reuses the SM-2 scheduler with
-// KANJI_TUNING; the kanji_cards SRS columns use base names.
+// POST /api/kanji-cards/[id]/review — record a kanji-in-word review.
+// Body: { reviewId, grade, practice?, deck?: "smart" | "all" }. Smart Kanji
+// schedules the base SRS columns and All Kanji its own all_* columns — two
+// independent schedules on the same card, each with its own tuning.
 export async function POST(request: Request, { params }: Params) {
   const auth = await requireReviewSession();
   if ("response" in auth) return auth.response;
 
   const { id } = await params;
 
-  let body: { grade?: unknown; practice?: unknown; reviewId?: unknown };
+  let body: {
+    grade?: unknown;
+    practice?: unknown;
+    reviewId?: unknown;
+    deck?: unknown;
+  };
   try {
     body = await request.json();
   } catch {
@@ -41,6 +47,7 @@ export async function POST(request: Request, { params }: Params) {
   }
   const reviewId = body.reviewId;
   const practice = body.practice === true;
+  const deck = kanjiDeckFromParam(body.deck);
 
   const { data: card, error: readErr } = await auth.supabase
     .from("kanji_cards")
@@ -56,10 +63,10 @@ export async function POST(request: Request, { params }: Params) {
   }
 
   const reviewedAt = Date.now();
-  const prev = readSrs(card, "word"); // kanji_cards use the base SRS column names
+  const prev = readSrs(card, deck);
   const applySchedule = !(practice && isEarly(prev, reviewedAt));
   const scheduled = applySchedule
-    ? schedule(prev, grade, reviewedAt, KANJI_TUNING)
+    ? schedule(prev, grade, reviewedAt, DECK_TUNING[deck])
     : {
         next: prev,
         log: {
@@ -93,6 +100,9 @@ export async function POST(request: Request, { params }: Params) {
       p_elapsed_days: log.elapsed_days,
       p_reviewed_at: new Date(reviewedAt).toISOString(),
       p_client_review_id: reviewId,
+      // Omitted for Smart Kanji (the RPC's default), so its reviews keep
+      // working on a database that predates 0012_all_kanji_schedule.sql.
+      ...(deck === "all-kanji" ? { p_deck: "all" } : {}),
     })
     .maybeSingle();
   if (commitError) {
