@@ -1,35 +1,40 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 import type { User } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/client";
 
-// Current authenticated user, kept in sync via Supabase auth state changes.
-export function useUser() {
-  const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
+// The signed-in user, for display (the account menu's address). One auth
+// subscription is shared by every caller — the menu renders twice, sidebar and
+// top bar — and its first event (INITIAL_SESSION) carries the session already
+// in the browser, so showing the address costs no request. Access is gated
+// elsewhere (the proxy, and every API route verifies the JWT), so the stored
+// session is good enough to show who's signed in.
 
-  useEffect(() => {
-    const supabase = createClient();
-    let active = true;
+type AuthSnapshot = { user: User | null; loading: boolean };
 
-    supabase.auth.getUser().then(({ data }) => {
-      if (!active) return;
-      setUser(data.user);
-      setLoading(false);
-    });
+const LOADING: AuthSnapshot = { user: null, loading: true };
+let snapshot = LOADING;
+const listeners = new Set<() => void>();
+let subscription: { unsubscribe: () => void } | null = null;
 
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
-    });
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  if (!subscription) {
+    subscription = createClient().auth.onAuthStateChange((_event, session) => {
+      snapshot = { user: session?.user ?? null, loading: false };
+      for (const notify of listeners) notify();
+    }).data.subscription;
+  }
+  return () => {
+    listeners.delete(listener);
+    if (listeners.size === 0) {
+      subscription?.unsubscribe();
+      subscription = null;
+    }
+  };
+}
 
-    return () => {
-      active = false;
-      subscription.unsubscribe();
-    };
-  }, []);
-
-  return { user, loading };
+export function useUser(): AuthSnapshot {
+  return useSyncExternalStore(subscribe, () => snapshot, () => LOADING);
 }

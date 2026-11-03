@@ -107,7 +107,8 @@ export default function VocabDeck({
     loadedAt,
     buildQueue,
     sessionKey: `${category}|${newLimit}`,
-    // A word added or deleted elsewhere is a different deck — start over.
+    // A word added or deleted elsewhere is a different deck — start over,
+    // unless a run is under way (then new words wait for the next one).
     onMembershipChange: "rebuild",
     send,
     toCard,

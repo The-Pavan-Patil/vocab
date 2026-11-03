@@ -84,7 +84,8 @@ export default function DictionarySearch({
   onRevealInList,
 }: {
   vocab: Vocab[];
-  onAdded: () => void;
+  // The saved (added or updated) row, for the page to patch into its list.
+  onAdded: (saved: Vocab[]) => void;
   onRevealInList: (word: string) => void;
 }) {
   const [query, setQuery] = useState("");
@@ -265,7 +266,7 @@ export default function DictionarySearch({
       // back on restores the same character cards and schedules.
       const kanji_selection = draftSelection;
       const word = draft.kanji.trim();
-      const { inserted, updated, syncWarning } = await createVocab(
+      const { rows, inserted, updated, syncWarning } = await createVocab(
         { ...draft, kanji_selection },
         { updateExisting: true }
       );
@@ -286,7 +287,7 @@ export default function DictionarySearch({
         toastKanjiSyncWarning("Word saved, but Kanji sync needs a retry", syncWarning);
       }
       closeDraft();
-      onAdded();
+      onAdded(rows);
     } catch (err) {
       toastError("Couldn’t save the word", err, {
         nextStep: "Your edits are kept — try saving again.",

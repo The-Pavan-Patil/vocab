@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
 import { parseFile } from "@/lib/parse";
+import { withServerTiming } from "@/lib/server-timing";
 
 export const runtime = "nodejs";
 
 // POST /api/import — multipart form with a single "file" field.
 // Parses CSV/XLSX/DOCX/PDF and returns the parsed rows WITHOUT writing to the DB.
 // The client previews/edits them and then POSTs to /api/vocab to persist.
-export async function POST(request: Request) {
+export const POST = withServerTiming(async function POST(request: Request) {
   let form: FormData;
   try {
     form = await request.formData();
@@ -30,4 +31,4 @@ export async function POST(request: Request) {
     const message = err instanceof Error ? err.message : "Failed to parse file.";
     return NextResponse.json({ error: message }, { status: 400 });
   }
-}
+});

@@ -5,6 +5,7 @@ import type JishoApi from "unofficial-jisho-api";
 import type { JishoResult } from "unofficial-jisho-api";
 import type { DictEntry } from "@/lib/types";
 import { mergeResults, romajiSearch } from "@/lib/romaji-search";
+import { timed, withServerTiming } from "@/lib/server-timing";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -37,7 +38,7 @@ function toEntry(r: JishoResult): DictEntry {
 // GET /api/dictionary?q= — search words via Jisho (JMdict/KanjiDic sources).
 // A romaji query may run a couple of extra searches (lib/romaji-search.ts) so
 // "Taberu" or "koohii" find their words; the results come back merged.
-export async function GET(request: Request) {
+export const GET = withServerTiming(async function GET(request: Request) {
   const q = new URL(request.url).searchParams.get("q")?.trim() ?? "";
   if (!q) {
     return NextResponse.json({ results: [] });
@@ -45,7 +46,7 @@ export async function GET(request: Request) {
 
   const romaji = romajiSearch(q);
   const settled = await Promise.allSettled(
-    (romaji?.keys ?? [q]).map((key) => jisho.searchForPhrase(key))
+    (romaji?.keys ?? [q]).map((key) => timed("jisho", jisho.searchForPhrase(key)))
   );
   const lists = settled.flatMap((s) =>
     s.status === "fulfilled" ? [(s.value.data ?? []).map(toEntry)] : []
@@ -58,4 +59,4 @@ export async function GET(request: Request) {
     );
   }
   return NextResponse.json({ results: mergeResults(lists, romaji?.romaji) });
-}
+});

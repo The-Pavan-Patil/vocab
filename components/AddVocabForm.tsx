@@ -4,7 +4,7 @@ import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { createVocab } from "@/lib/api";
 import { toastError, toastKanjiSyncWarning } from "@/lib/notify";
-import { CATEGORIES, type VocabInput } from "@/lib/types";
+import { CATEGORIES, type Vocab, type VocabInput } from "@/lib/types";
 import { useDesktopAutoFocus } from "@/hooks/use-desktop-autofocus";
 import { useBeforeUnload } from "@/hooks/use-before-unload";
 import { isDraftDirty } from "@/lib/vocab-draft";
@@ -48,7 +48,8 @@ export default function AddVocabForm({
   onAdded,
   onRevealInList,
 }: {
-  onAdded: () => void;
+  // The saved row, for the page to add to its list.
+  onAdded: (saved: Vocab[]) => void;
   // Jump to the List tab filtered to a word (for "already in your list").
   onRevealInList?: (word: string) => void;
 }) {
@@ -85,7 +86,7 @@ export default function AddVocabForm({
     try {
       // When studying as kanji, persist exactly the kanji the user left on.
       const kanji_selection = form.study_as_kanji ? kanjiSelection : null;
-      const { inserted, syncWarning } = await createVocab({
+      const { rows, inserted, syncWarning } = await createVocab({
         ...form,
         kanji_selection,
       });
@@ -101,7 +102,7 @@ export default function AddVocabForm({
         if (syncWarning) {
           toastKanjiSyncWarning("Saved, but Kanji sync needs a retry", syncWarning);
         }
-        onAdded();
+        onAdded(rows);
       } else {
         // Same word is already saved — keep the form so it can be tweaked.
         const word = form.kanji.trim();

@@ -5,9 +5,10 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { KanjiInfo, KanjiPromptPart, Vocab } from "./types.ts";
-import { getKanji } from "./kanjiapi.ts";
+import { getCachedKanji, getKanji } from "./kanjiapi.ts";
 import { kanjiChars } from "./kanji-deck.ts";
 import { selectionForWord } from "./kanji-selection.ts";
+import { selectAll } from "./supabase/select-all.ts";
 import {
   segment,
   dottedReading,
@@ -44,14 +45,66 @@ export type KanjiSyncStats = {
   deactivated: number;
 };
 
+type KanjiSyncDependencies = {
+  getKanji: typeof getKanji;
+  segment: typeof segment;
+  /** Reads the kanji cache for many characters at once; without it, every
+   *  character goes through getKanji on its own. */
+  getCachedKanji?: typeof getCachedKanji;
+};
+
 type KanjiSyncOptions = {
   /** Full-deck reconciliation also deactivates cards outside `words`. */
   full?: boolean;
-  dependencies?: {
-    getKanji: typeof getKanji;
-    segment: typeof segment;
-  };
+  dependencies?: KanjiSyncDependencies;
 };
+
+// Kanji fetched from kanjiapi.dev at once when the cache misses them.
+const LOOKUP_CONCURRENCY = 8;
+// Ids per `in` filter, so a large import or deactivation stays well inside
+// URL limits.
+const IDS_PER_REQUEST = 100;
+
+function chunks<T>(items: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}
+
+// The cards a reconciliation compares against: every card of the user for a
+// full sync (paged — PostgREST truncates at max rows), else those of `vocabIds`.
+async function readExistingCards(
+  supabase: SupabaseClient,
+  userId: string,
+  vocabIds: string[],
+  full: boolean
+): Promise<ExistingKanjiCard[]> {
+  const columns = "id,vocab_id,character,active";
+  if (full) {
+    return selectAll<ExistingKanjiCard>((from, to) =>
+      supabase
+        .from("kanji_cards")
+        .select(columns, { count: "exact" })
+        .eq("user_id", userId)
+        .order("id")
+        .range(from, to)
+    );
+  }
+  const pages = await Promise.all(
+    chunks(vocabIds, IDS_PER_REQUEST).map((ids) =>
+      selectAll<ExistingKanjiCard>((from, to) =>
+        supabase
+          .from("kanji_cards")
+          .select(columns, { count: "exact" })
+          .eq("user_id", userId)
+          .in("vocab_id", ids)
+          .order("id")
+          .range(from, to)
+      )
+    )
+  );
+  return pages.flat();
+}
 
 const cardKey = (vocabId: string | null, character: string) =>
   `${vocabId ?? ""}\u0000${character}`;
@@ -104,26 +157,63 @@ export async function buildDesiredKanjiCards(
   supabase: SupabaseClient,
   userId: string,
   words: Vocab[],
-  dependencies: NonNullable<KanjiSyncOptions["dependencies"]> = {
+  dependencies: KanjiSyncDependencies = {
     getKanji,
     segment,
+    getCachedKanji,
   }
 ): Promise<DesiredKanjiCard[]> {
+  const toggled = words.filter((word) => word.study_as_kanji);
+  const charactersOf = (word: Vocab) =>
+    Array.isArray(word.kanji_selection)
+      ? selectionForWord(word.kanji, word.kanji_selection) ?? []
+      : kanjiChars(word.kanji);
+  // Every kanji of the toggled words that have cards to make: the selected
+  // ones become cards, and the rest still split compound readings.
+  const allCharacters = [
+    ...new Set(
+      toggled
+        .filter((word) => charactersOf(word).length > 0)
+        .flatMap((word) => kanjiChars(word.kanji))
+    ),
+  ];
+
+  // One cache read for all of them. A failed read isn't fatal: those
+  // characters just go through getKanji, which checks the cache itself.
+  let cached: Record<string, KanjiInfo> = {};
+  if (dependencies.getCachedKanji && allCharacters.length > 0) {
+    try {
+      cached = await dependencies.getCachedKanji(supabase, allCharacters);
+    } catch {
+      cached = {};
+    }
+  }
+
   const infoPromises = new Map<string, Promise<KanjiInfo | null>>();
   const loadInfo = (character: string) => {
     const pending = infoPromises.get(character);
     if (pending) return pending;
-    const request = dependencies.getKanji(supabase, character);
+    const hit = cached[character];
+    const request = hit
+      ? Promise.resolve(hit)
+      : dependencies.getKanji(supabase, character);
     infoPromises.set(character, request);
     return request;
   };
 
-  const toggled = words.filter((word) => word.study_as_kanji);
+  // Look up the characters the cache doesn't have yet (kanjiapi.dev) up front,
+  // several at a time, rather than a word at a time. A failed lookup stays in
+  // `infoPromises`, so a word that selects that kanji still fails the sync
+  // below, while a kanji used only to split readings is skipped.
+  await mapWithConcurrency(
+    allCharacters.filter((character) => !cached[character]),
+    LOOKUP_CONCURRENCY,
+    (character) => loadInfo(character).catch(() => null)
+  );
+
   const rowsByWord = await mapWithConcurrency(toggled, 4, async (word) => {
     const explicit = Array.isArray(word.kanji_selection);
-    const characters = explicit
-      ? selectionForWord(word.kanji, word.kanji_selection) ?? []
-      : kanjiChars(word.kanji);
+    const characters = charactersOf(word);
     if (characters.length === 0) return [];
 
     let segments: FuriganaSegment[] | null = null;
@@ -237,50 +327,43 @@ export async function syncKanjiCards(
     return { created: 0, updated: 0, activated: 0, deactivated: 0 };
   }
 
-  const desired = await buildDesiredKanjiCards(
-    supabase,
-    userId,
-    words,
-    options.dependencies
-  );
-
-  let existingQuery = supabase
-    .from("kanji_cards")
-    .select("id,vocab_id,character,active")
-    .eq("user_id", userId);
-  if (!options.full) existingQuery = existingQuery.in("vocab_id", vocabIds);
-  const { data: existingData, error: existingError } = await existingQuery;
-  if (existingError) throw new Error(existingError.message);
-
-  const existing = (existingData ?? []) as ExistingKanjiCard[];
+  // The current cards don't depend on the desired ones: read them meanwhile.
+  const [desired, existing] = await Promise.all([
+    buildDesiredKanjiCards(supabase, userId, words, options.dependencies),
+    readExistingCards(supabase, userId, vocabIds, options.full === true),
+  ]);
   const plan = planKanjiReconciliation(existing, desired);
 
-  if (desired.length > 0) {
-    // Keep failed-segmentation rows in a separate payload. PostgREST bulk rows
-    // share a column shape; mixing omitted reading fields with populated ones can
-    // turn the omissions into nulls and erase previously-known readings.
-    const withReadings = desired.filter((row) => "reading" in row);
-    const withoutReadings = desired.filter((row) => !("reading" in row));
-    for (const rows of [withReadings, withoutReadings]) {
-      if (rows.length === 0) continue;
-      const { error } = await supabase
+  // The writes touch disjoint rows — each upsert payload has its own cards and
+  // deactivation only cards outside both — so they go out together. If one
+  // fails the others still land (each is idempotent), the sync reports the
+  // failure, and a retry finishes the rest.
+  const writes: PromiseLike<{ error: { message: string } | null }>[] = [];
+  // Keep failed-segmentation rows in a separate payload. PostgREST bulk rows
+  // share a column shape; mixing omitted reading fields with populated ones can
+  // turn the omissions into nulls and erase previously-known readings.
+  const withReadings = desired.filter((row) => "reading" in row);
+  const withoutReadings = desired.filter((row) => !("reading" in row));
+  for (const rows of [withReadings, withoutReadings]) {
+    if (rows.length === 0) continue;
+    writes.push(
+      supabase.from("kanji_cards").upsert(rows, {
+        onConflict: "user_id,vocab_id,character",
+        ignoreDuplicates: false,
+      })
+    );
+  }
+  for (const ids of chunks(plan.deactivateIds, IDS_PER_REQUEST)) {
+    writes.push(
+      supabase
         .from("kanji_cards")
-        .upsert(rows, {
-          onConflict: "user_id,vocab_id,character",
-          ignoreDuplicates: false,
-        });
-      if (error) throw new Error(error.message);
-    }
+        .update({ active: false })
+        .eq("user_id", userId)
+        .in("id", ids)
+    );
   }
-
-  if (plan.deactivateIds.length > 0) {
-    const { error } = await supabase
-      .from("kanji_cards")
-      .update({ active: false })
-      .eq("user_id", userId)
-      .in("id", plan.deactivateIds);
-    if (error) throw new Error(error.message);
-  }
+  const failed = (await Promise.all(writes)).find((result) => result.error);
+  if (failed?.error) throw new Error(failed.error.message);
 
   return {
     created: plan.created,

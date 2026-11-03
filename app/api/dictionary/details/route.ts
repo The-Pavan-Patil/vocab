@@ -5,6 +5,7 @@ import { toSentenceRomaji } from "@/lib/sentence-romaji";
 import { fetchKanjiInfo } from "@/lib/kanjiapi";
 import { kanjiChars } from "@/lib/kanji-deck";
 import type { DictExample, DictKanji, KanjiInfo } from "@/lib/types";
+import { timed, withServerTiming } from "@/lib/server-timing";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -29,14 +30,13 @@ function infoToDictKanji(info: KanjiInfo): DictKanji {
 // GET /api/dictionary/details?word= — example sentences (Tatoeba) + per-kanji
 // info (KanjiDic). Loaded lazily when a result is expanded; each source can
 // fail independently without breaking the other.
-export async function GET(request: Request) {
+export const GET = withServerTiming(async function GET(request: Request) {
   const word = new URL(request.url).searchParams.get("word")?.trim() ?? "";
   if (!word) {
     return NextResponse.json({ examples: [], kanji: [] });
   }
 
-  const examplesP = jisho
-    .searchForExamples(word)
+  const examplesP = timed("jisho", jisho.searchForExamples(word))
     .then((r) =>
       Promise.all(
         (r.results ?? []).slice(0, 5).map(
@@ -63,4 +63,4 @@ export async function GET(request: Request) {
 
   const [examples, kanji] = await Promise.all([examplesP, kanjiP]);
   return NextResponse.json({ examples, kanji });
-}
+});

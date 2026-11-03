@@ -1,8 +1,20 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { KanjiCard, KanjiInfo } from "@/lib/types";
-import { fetchKanji, fetchKanjiCards } from "@/lib/api";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
+import type { KanjiCard, KanjiDeckData, KanjiInfo } from "@/lib/types";
+import { fetchKanji, fetchKanjiCards, type KanjiPrefetch } from "@/lib/api";
+import {
+  kanjiCardsVersion,
+  noteKanjiCardWords,
+  subscribeKanjiCardsChanged,
+} from "@/lib/kanji-cards-events";
 
 // The Smart Kanji section's one copy of the kanji cards, shared by both of its
 // decks (each projects it onto its own schedule).
@@ -10,16 +22,22 @@ import { fetchKanji, fetchKanjiCards } from "@/lib/api";
 // Fetched ONCE — on the section's first show — together with the details of
 // every kanji in the cards' words. Re-showing the tab never refetches (the ref
 // survives <Activity>, which re-runs this effect on every show). It refetches
-// only when the user's words changed (`wordsVersion`, bumped by the page on an
-// add / import / edit / delete), and then only once the section is showing.
+// only when the user's words changed in a way that can touch the cards
+// (`wordsVersion`, bumped by the page when a saved or deleted word studies its
+// kanji or has cards here), or a deck-wide sync ran (lib/kanji-cards-events),
+// and then only once the section is showing. The page may have fetched the
+// cards already, in the background (`prefetched`): that copy is used when it
+// was read at the same version of the words.
 // No deck-wide sync runs here: adding, editing and importing a word already
 // reconcile that word's kanji cards on the server.
 export function useKanjiCards({
   active,
   wordsVersion,
+  prefetched = null,
 }: {
   active: boolean;
   wordsVersion: number;
+  prefetched?: KanjiPrefetch | null;
 }) {
   const [cards, setCards] = useState<KanjiCard[]>([]);
   const [kanji, setKanji] = useState<Record<string, KanjiInfo>>({});
@@ -28,11 +46,19 @@ export function useKanjiCards({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
+  const syncVersion = useSyncExternalStore(
+    subscribeKanjiCardsChanged,
+    kanjiCardsVersion,
+    () => 0
+  );
   // Kanji whose fallback lookup failed; retried when a card asks again.
   const [failed, setFailed] = useState<ReadonlySet<string>>(() => new Set());
 
   // Which version of the data we last fetched, so a re-show is a no-op.
   const fetchedRef = useRef<string | null>(null);
+  // The prefetched copy already used, once (or failed): later fetches go to
+  // the server, so a failed prefetch isn't shown again on the next show.
+  const usedPrefetchRef = useRef<Promise<KanjiDeckData> | null>(null);
   // Only the newest request may land (a word change can overlap a fetch).
   const requestRef = useRef(0);
   const inFlightKanjiRef = useRef(new Set<string>());
@@ -48,14 +74,24 @@ export function useKanjiCards({
 
   useEffect(() => {
     if (!active) return;
-    const version = `${wordsVersion}:${reloadToken}`;
+    const version = `${wordsVersion}:${reloadToken}:${syncVersion}`;
     if (fetchedRef.current === version) return;
     fetchedRef.current = version;
     const request = ++requestRef.current;
-    fetchKanjiCards()
+    const ready =
+      prefetched &&
+      prefetched.tag === `${wordsVersion}:${syncVersion}` &&
+      usedPrefetchRef.current !== prefetched.promise
+        ? prefetched.promise
+        : null;
+    if (ready) usedPrefetchRef.current = ready;
+    (ready ?? fetchKanjiCards())
       .then((data) => {
         if (request !== requestRef.current) return;
         setCards(data.cards);
+        noteKanjiCardWords(
+          data.cards.flatMap((card) => (card.vocab_id ? [card.vocab_id] : []))
+        );
         mergeKanji(data.kanji);
         setLoadedAt(Date.now());
         setError(null);
@@ -69,7 +105,7 @@ export function useKanjiCards({
       .finally(() => {
         if (request === requestRef.current) setLoading(false);
       });
-  }, [active, wordsVersion, reloadToken, mergeKanji]);
+  }, [active, wordsVersion, reloadToken, syncVersion, prefetched, mergeKanji]);
 
   const retry = useCallback(() => {
     setError(null);

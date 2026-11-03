@@ -3,6 +3,7 @@ import { requireReviewSession } from "@/lib/supabase/require-user";
 import { isEarly, schedule, type Grade } from "@/lib/srs";
 import { DECK_TUNING, kanjiDeckFromParam, readSrs } from "@/lib/decks";
 import { isReviewId } from "@/lib/review-command";
+import { withServerTiming } from "@/lib/server-timing";
 
 export const runtime = "nodejs";
 
@@ -14,7 +15,7 @@ const GRADES: Grade[] = ["remember", "right", "wrong"];
 // Body: { reviewId, grade, practice?, deck?: "smart" | "all" }. Smart Kanji
 // schedules the base SRS columns and All Kanji its own all_* columns — two
 // independent schedules on the same card, each with its own tuning.
-export async function POST(request: Request, { params }: Params) {
+export const POST = withServerTiming(async function POST(request: Request, { params }: Params) {
   const auth = await requireReviewSession();
   if ("response" in auth) return auth.response;
 
@@ -46,7 +47,7 @@ export async function POST(request: Request, { params }: Params) {
     );
   }
   const reviewId = body.reviewId;
-  const practice = body.practice === true;
+  // `practice` is advisory only — see applySchedule below.
   const deck = kanjiDeckFromParam(body.deck);
 
   const { data: card, error: readErr } = await auth.supabase
@@ -64,7 +65,12 @@ export async function POST(request: Request, { params }: Params) {
 
   const reviewedAt = Date.now();
   const prev = readSrs(card, deck);
-  const applySchedule = !(practice && isEarly(prev, reviewedAt));
+  // A card that isn't due yet by the server's clock is a practice rep: logged,
+  // schedule untouched, so early reviews can't inflate its interval. That
+  // covers cramming ("Study again"), and also a card shown from stale data —
+  // already reviewed on another device — whose client still thinks it's due
+  // and so doesn't send `practice`. The server's clock decides, not the flag.
+  const applySchedule = !isEarly(prev, reviewedAt);
   const scheduled = applySchedule
     ? schedule(prev, grade, reviewedAt, DECK_TUNING[deck])
     : {
@@ -117,4 +123,4 @@ export async function POST(request: Request, { params }: Params) {
   }
 
   return NextResponse.json({ data: updated });
-}
+});

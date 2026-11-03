@@ -95,7 +95,7 @@
   --sidebar-accent-foreground: oklch(0.355 0.006 75);
   --sidebar-border: oklch(0.919 0.0055 85);
   --sidebar-ring: oklch(0.52 0.058 172);
-  /* Height of the fixed bottom nav (app/page.tsx), so overlays such as toasts
+  /* Height of the fixed bottom nav (components/Home.tsx), so overlays such as toasts
      can sit above it. 0 where the nav is hidden (lg and up). */
   --app-nav-clearance: 0px;
   /* Room for the sticky top bar, which only exists below lg (desktop has

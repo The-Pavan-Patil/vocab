@@ -212,9 +212,10 @@ export function isDue(card: Schedulable, now: number): boolean {
 
 /**
  * A reviewed card whose next review is still in the future. Reviewing such a
- * card (only possible via cram / "Study again") is an *early* review — see the
- * `practice` path in the review route: an early review is logged but does NOT
- * advance the schedule, so cramming can't inflate intervals.
+ * card (via cram / "Study again", or from stale data after another device
+ * reviewed it) is an *early* review — see the practice path in the review
+ * route: an early review is logged but does NOT advance the schedule, so
+ * cramming can't inflate intervals.
  */
 export function isEarly(card: Schedulable, now: number): boolean {
   return card.due_at != null && Date.parse(card.due_at) > now;

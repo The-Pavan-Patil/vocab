@@ -6,13 +6,14 @@ import {
   validateKanjiSelection,
 } from "@/lib/kanji-selection";
 import { syncKanjiCards } from "@/lib/kanji-sync";
+import { timed, withServerTiming } from "@/lib/server-timing";
 
 export const runtime = "nodejs";
 
 type Params = { params: Promise<{ id: string }> };
 
 // PATCH /api/vocab/[id] — update editable fields of one of the user's records.
-export async function PATCH(request: Request, { params }: Params) {
+export const PATCH = withServerTiming(async function PATCH(request: Request, { params }: Params) {
   const auth = await requireUser();
   if ("response" in auth) return auth.response;
 
@@ -92,15 +93,18 @@ export async function PATCH(request: Request, { params }: Params) {
   }
   let syncWarning: string | null = null;
   try {
-    await syncKanjiCards(auth.supabase, auth.user.id, [data as Vocab]);
+    await timed(
+      "kanji-sync",
+      syncKanjiCards(auth.supabase, auth.user.id, [data as Vocab])
+    );
   } catch (syncError) {
     syncWarning = (syncError as Error).message;
   }
   return NextResponse.json({ data: data as Vocab, sync_warning: syncWarning });
-}
+});
 
 // DELETE /api/vocab/[id] — remove one of the user's records.
-export async function DELETE(_request: Request, { params }: Params) {
+export const DELETE = withServerTiming(async function DELETE(_request: Request, { params }: Params) {
   const auth = await requireUser();
   if ("response" in auth) return auth.response;
 
@@ -110,4 +114,4 @@ export async function DELETE(_request: Request, { params }: Params) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
   return NextResponse.json({ ok: true });
-}
+});

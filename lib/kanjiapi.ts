@@ -8,6 +8,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { KanjiInfo, KanjiWord } from "./types";
+import { timed } from "./server-timing.ts";
 
 const BASE = "https://kanjiapi.dev/v1";
 const MAX_WORDS = 12; // cap example words per kanji
@@ -34,10 +35,13 @@ type RawWord = {
  */
 export async function fetchKanjiInfo(character: string): Promise<KanjiInfo | null> {
   const enc = encodeURIComponent(character);
-  const [kRes, wRes] = await Promise.all([
-    fetch(`${BASE}/kanji/${enc}`),
-    fetch(`${BASE}/words/${enc}`).catch(() => null),
-  ]);
+  const [kRes, wRes] = await timed(
+    "kanjiapi",
+    Promise.all([
+      fetch(`${BASE}/kanji/${enc}`),
+      fetch(`${BASE}/words/${enc}`).catch(() => null),
+    ])
+  );
   if (!kRes.ok) return null; // 404 → not a known kanji
   const k = (await kRes.json()) as RawKanji;
   const rawWords = wRes && wRes.ok ? ((await wRes.json()) as RawWord[]) : [];
@@ -88,27 +92,45 @@ export function rowToInfo(row: Record<string, unknown>): KanjiInfo {
   };
 }
 
+// The cached columns a KanjiInfo is read from. The example `words` stay in the
+// cache but aren't read back: no screen shows them, and they were ~40% of the
+// Smart Kanji deck's payload (12 per kanji). rowToInfo leaves them empty.
+const KANJI_DETAIL_COLUMNS =
+  "character,meanings,on_readings,kun_readings,jlpt,grade,stroke_count,heisig_en";
+
+// Characters per `in` filter — a few hundred kanji keep the URL well inside
+// proxy limits; a larger set is read in parallel chunks.
+const CHARACTERS_PER_QUERY = 200;
+
 /**
- * Read many kanji from the `kanji` cache table in ONE query, keyed by character.
- * Cache-only — characters that were never looked up are simply absent (the
- * client falls back to /api/kanji/[char] for those). Pass an RLS-scoped client.
+ * Read many kanji from the `kanji` cache table, keyed by character — one query
+ * per 200 characters. Cache-only — characters that were never looked up are
+ * simply absent (the client falls back to /api/kanji/[char] for those). Pass an
+ * RLS-scoped client.
  */
 export async function getCachedKanji(
   supabase: SupabaseClient,
   characters: string[]
 ): Promise<Record<string, KanjiInfo>> {
   if (characters.length === 0) return {};
-  const { data, error } = await supabase
-    .from("kanji")
-    .select("*")
-    .in("character", characters);
-  if (error) throw new Error(error.message);
-  return Object.fromEntries(
-    (data ?? []).map((row) => {
-      const info = rowToInfo(row);
-      return [info.character, info];
-    })
+  const chunks: string[][] = [];
+  for (let i = 0; i < characters.length; i += CHARACTERS_PER_QUERY) {
+    chunks.push(characters.slice(i, i + CHARACTERS_PER_QUERY));
+  }
+  const results = await Promise.all(
+    chunks.map((chunk) =>
+      supabase.from("kanji").select(KANJI_DETAIL_COLUMNS).in("character", chunk)
+    )
   );
+  const entries: [string, KanjiInfo][] = [];
+  for (const { data, error } of results) {
+    if (error) throw new Error(error.message);
+    for (const row of data ?? []) {
+      const info = rowToInfo(row);
+      entries.push([info.character, info]);
+    }
+  }
+  return Object.fromEntries(entries);
 }
 
 /**
@@ -121,7 +143,7 @@ export async function getKanji(
 ): Promise<KanjiInfo | null> {
   const { data: cached } = await supabase
     .from("kanji")
-    .select("*")
+    .select(KANJI_DETAIL_COLUMNS)
     .eq("character", character)
     .maybeSingle();
   if (cached) return rowToInfo(cached);

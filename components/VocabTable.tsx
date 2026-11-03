@@ -93,12 +93,16 @@ const EXPORT_FILENAME = {
 export default function VocabTable({
   vocab,
   loadState = "ready",
-  onChanged,
+  onSaved,
+  onDeleted,
   revealWord,
 }: {
   vocab: Vocab[];
   loadState?: VocabLoadState;
-  onChanged: () => void;
+  // An edited word as the server saved it, and a deleted word's id — the page
+  // patches its list rather than refetching it.
+  onSaved: (updated: Vocab) => void;
+  onDeleted: (id: string) => void;
   revealWord?: { word: string; requestId: number } | null;
 }) {
   const [query, setQuery] = useState("");
@@ -236,7 +240,7 @@ export default function VocabTable({
     setBusy(true);
     try {
       await deleteVocab(id);
-      onChanged();
+      onDeleted(id);
       toast.success("Word deleted");
     } catch (e) {
       toastError("Couldn’t delete the word", e, { retry: () => void doDelete(id) });
@@ -450,7 +454,7 @@ export default function VocabTable({
       <EditVocabDialog
         word={editing}
         onClose={() => setEditing(null)}
-        onSaved={onChanged}
+        onSaved={onSaved}
       />
 
       <AlertDialog

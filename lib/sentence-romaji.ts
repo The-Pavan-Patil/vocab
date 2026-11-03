@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import path from "node:path";
+import { timed } from "./server-timing.ts";
 
 // Server-only. Converts arbitrary Japanese (mixed kanji/kana) to full,
 // space-separated Hepburn romaji using kuroshiro + the kuromoji analyzer.
@@ -36,7 +37,9 @@ export async function getConverter(): Promise<Converter> {
     })();
   }
   try {
-    converter = await initPromise;
+    // Loading the dictionary is the slow part (17 MB, once per server
+    // instance) — timed for every request that waits on it.
+    converter = await timed("kuromoji-init", initPromise);
     return converter;
   } catch (e) {
     initPromise = null; // allow a later retry if init failed transiently

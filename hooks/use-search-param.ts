@@ -3,9 +3,9 @@
 import { useSyncExternalStore } from "react";
 
 // URL query state without a <Suspense> boundary. next/navigation's
-// useSearchParams() would make the whole (prerendered) app shell client-render
-// behind a fallback; this reads window.location instead — null on the server
-// and during hydration, the real value right after.
+// useSearchParams() would put the whole app shell behind a client-rendered
+// fallback; this reads window.location instead — null on the server and
+// during hydration, the real value right after.
 //
 // Writes go through the native history API, which Next.js integrates with its
 // router (see "window.history.pushState" in

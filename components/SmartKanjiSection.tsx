@@ -2,6 +2,7 @@
 
 import { Activity } from "react";
 import type { Vocab } from "@/lib/types";
+import type { KanjiPrefetch } from "@/lib/api";
 import { useKanjiCards } from "@/hooks/use-kanji-cards";
 import SmartKanjiDeck from "@/components/decks/SmartKanjiDeck";
 import AllKanjiDeck from "@/components/decks/AllKanjiDeck";
@@ -34,21 +35,24 @@ export default function SmartKanjiSection({
   active,
   vocab,
   wordsVersion,
+  prefetched = null,
   onVocabChanged,
 }: {
   // Whether this section is the tab showing — the cards load on first show.
   active: boolean;
   vocab: Vocab[];
-  // Bumped by the page whenever the user's words change, so the cards (which
-  // the server re-syncs from the words) are refetched — once, when showing.
+  // Bumped by the page whenever a word change can touch the cards (which the
+  // server re-syncs from the words), so they're refetched — once, when showing.
   wordsVersion: number;
+  // The cards, fetched ahead by the page (see useKanjiCards).
+  prefetched?: KanjiPrefetch | null;
   onVocabChanged?: (updated: Vocab) => void;
 }) {
   // In the URL (?smart=all) so a reload or a shared link keeps the deck.
   const view: View = useSearchParam("smart") === "all" ? "all" : "smart";
   const setView = (next: View) =>
     setSearchParams({ smart: next === "smart" ? null : next });
-  const store = useKanjiCards({ active, wordsVersion });
+  const store = useKanjiCards({ active, wordsVersion, prefetched });
   const deckName = view === "all" ? "All Kanji" : "Smart Kanji";
   const hasCards = store.cards.length > 0;
 

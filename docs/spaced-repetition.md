@@ -149,10 +149,12 @@ but does **not** move its schedule (`due_at` / `interval` / `ease` are left
 untouched). This is deliberate: reviewing a card early is no evidence it should
 wait *longer*, and letting early reps compound would inflate intervals (e.g.
 38d → 95d after a single early review). The client tags such reps
-`practice: true`; the server confirms against its own clock via `isEarly()`
-before skipping the reschedule (see `app/api/vocab/[id]/review/route.ts`). A
-crammed card that is genuinely **due/overdue** still schedules normally — cram
-never *blocks* a real review.
+`practice: true`, but the server decides by its own clock alone: any review of
+a card that `isEarly()` says isn't due is a practice rep, flag or not (see
+`app/api/vocab/[id]/review/route.ts`). That also covers a card shown from stale
+data — reviewed on another device since this one loaded — whose client still
+thinks it's due. A crammed card that is genuinely **due/overdue** still
+schedules normally — cram never *blocks* a real review.
 
 **Session size is configurable.** The new-card cap applies to **new** cards only
 (overdue reviews are never capped — you should always clear what you've already
@@ -175,7 +177,7 @@ components/decks/VocabDeck.tsx ── hooks/use-study-session.ts ──FIFO outb
   POST /api/vocab/[id]/review { reviewId, grade, practice, mode } ──▶
   app/api/vocab/[id]/review/route.ts
      ├─ load card SRS state (RLS-scoped)
-     ├─ if (practice && isEarly): keep the schedule unchanged
+     ├─ if isEarly (server clock): keep the schedule unchanged
      ├─ else schedule(prev, grade, now, DECK_TUNING[deck])  ← lib/srs.ts (source of truth)
      └─ RPC commit_vocab_review
           ├─ lock + reject stale concurrent reviews
@@ -319,9 +321,13 @@ All Kanji   ─ projectCard(card, "all-kanji") ─ buildAllKanjiQueue(cards) ─
 - **Loaded once.** The section fetches the cards once (`hooks/use-kanji-cards.ts`)
   and both decks share them; `GET /api/kanji-cards` also returns the cached
   details of every kanji in the cards' words, so a card's back needs no request
-  per kanji. It refetches only after the user's words change.
+  per kanji. It refetches only after a word change that can touch the cards, a
+  deck-wide sync, or the app's return-to-view refresh.
 - **Live sessions are stable.** Server refreshes replace card data inside the
   current queue without rebuilding its order, progress, or forgotten-card repeats.
+  Outside a cram pass, a queued card that fresh data says is no longer due
+  (reviewed on another device) leaves the queue; a run under way is never
+  restarted by a refresh, even when cards were added or removed elsewhere.
 - **kanjiapi.dev** (no key, KANJIDIC2/JMdict) also replaces Jisho for the
   dictionary's per-kanji breakdown. `lib/kanjiapi.ts` normalizes it; the `kanji`
   table caches it. The existing word-level kanji deck (§4a) is untouched — the one
@@ -339,6 +345,7 @@ All Kanji   ─ projectCard(card, "all-kanji") ─ buildAllKanjiQueue(cards) ─
 | `supabase/0010_kanji_prompt_hints.sql` | Safe furigana prompt metadata for turned-off kanji |
 | `supabase/0011_vocab_sentence.sql` | Per-word example sentence, copied onto cards |
 | `supabase/0012_all_kanji_schedule.sql` | All Kanji's independent `all_*` schedule + `kanji_all` mode |
+| `supabase/0013_rls_initplan.sql` | RLS policies evaluate `auth.uid()` once per query |
 | `lib/kanjiapi.ts` | kanjiapi.dev fetch + normalize + DB cache |
 | `lib/furigana.ts` | kuroshiro furigana → per-kanji reading |
 | `lib/kanji-sync.ts` | Desired selections ↔ active/inactive `kanji_cards` reconciliation |
@@ -353,7 +360,7 @@ All Kanji   ─ projectCard(card, "all-kanji") ─ buildAllKanjiQueue(cards) ─
 ## 5. To enable it
 
 After `0002_auth_rls.sql`, run `0003_srs.sql` through
-`0012_all_kanji_schedule.sql` in numeric order. Existing cards keep their schedules;
+`0013_rls_initplan.sql` in numeric order. Existing cards keep their schedules;
 `0007` consolidates any legacy rename duplicates by keeping the most recently
 reviewed/mature schedule and reattaching the merged review history. Words remain outside Kanji decks until
 `study_as_kanji` is enabled.

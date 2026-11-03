@@ -102,8 +102,9 @@ export function useStudySession<C extends SessionCard, Result>({
   // The deck's session settings, as one string. A change rebuilds the queue.
   sessionKey: string;
   // When the deck's set of cards changes (a word added or removed elsewhere):
-  // "rebuild" starts a fresh session; "keep" keeps the run, drops removed cards,
-  // and only starts a session if the queue was empty and new cards arrived.
+  // "rebuild" starts a fresh session — unless a run is under way, which is
+  // kept as "keep" does; "keep" keeps the run, drops removed cards, and only
+  // starts a session if the queue was empty and new cards arrived.
   onMembershipChange: "rebuild" | "keep";
   send: (command: ReviewCommand) => Promise<Result>;
   // The saved row as this deck reads it (re-projected onto its schedule).
@@ -138,6 +139,9 @@ export function useStudySession<C extends SessionCard, Result>({
   const [lastGrade, setLastGrade] = useState<Grade | null>(null);
   // Bumped whenever a new card comes up, so a deck can reset per-card UI.
   const [turn, setTurn] = useState(0);
+  // Whether the current run is a cram pass (Study again), which studies cards
+  // that aren't due; a normal run only ever holds due and new cards.
+  const [cramming, setCramming] = useState(false);
   // A restart / settings change waiting on "restart this session?".
   const [pendingReset, setPendingReset] = useState<(() => void) | null>(null);
   // Study again, as a request the next render serves — so a restart confirmed
@@ -159,6 +163,7 @@ export function useStudySession<C extends SessionCard, Result>({
 
   function start(source: C[], at: number, cram: boolean) {
     const next = buildQueue(source, at, cram);
+    setCramming(cram);
     setNow(at);
     setRemaining(next);
     setSessionTotal(next.length);
@@ -171,21 +176,54 @@ export function useStudySession<C extends SessionCard, Result>({
 
   // New data from the parent. Same cards → swap the fresh objects into the live
   // queue (an edit keeps the queue order, progress and tallies). A changed set
-  // of cards rebuilds or refreshes the run, per the deck.
+  // of cards rebuilds or refreshes the run, per the deck — but a run already
+  // under way is never thrown away for it (the list can refresh on its own when
+  // the app comes back into view); it's kept, and new cards wait for the next.
+  //
+  // Outside a cram pass, a queued card that fresh data says isn't due any more
+  // (reviewed on another device meanwhile) leaves the queue rather than being
+  // studied again — but never one this session graded itself (a forgotten
+  // card waiting for its relearn), whose due time the server set by its own
+  // clock. A card that leaves unstudied, so (also a deleted one) leaves the
+  // session's total too.
   const cardsChanged = cards !== prevCards;
   const latest = cardsChanged ? withSaved(cards, saved) : pool;
   if (cardsChanged) {
     setPrevCards(cards);
     setPool(latest);
     const clock = Math.max(now, loadedAt);
+    const underWay = reviewedIds.size > 0 && remaining.length > 0;
+    const keep = (queue: C[]) => {
+      const refreshed = refreshQueue(queue, latest);
+      const kept = cramming
+        ? refreshed
+        : refreshed.filter(
+            (card) => reviewedIds.has(card.id) || !isEarly(card, clock)
+          );
+      const keptIds = new Set(kept.map((card) => card.id));
+      const left = new Set(
+        queue
+          .filter((card) => !keptIds.has(card.id) && !reviewedIds.has(card.id))
+          .map((card) => card.id)
+      ).size;
+      if (left > 0) setSessionTotal((total) => Math.max(0, total - left));
+      if (kept[0]?.id !== queue[0]?.id) {
+        // The card on screen went away: show the next one face up.
+        setFlipped(false);
+        setTurn((t) => t + 1);
+      }
+      // Emptied: the end screen's "Next review in …" counts from now.
+      if (kept.length === 0 && queue.length > 0) setNow(clock);
+      return kept;
+    };
     if (sameMembership(prevCards, cards)) {
-      setRemaining((queue) => refreshQueue(queue, latest));
-    } else if (onMembershipChange === "rebuild") {
+      setRemaining(keep(remaining));
+    } else if (onMembershipChange === "rebuild" && !underWay) {
       start(latest, clock, false);
     } else {
       const known = new Set(prevCards.map((card) => card.id));
       const arrived = cards.some((card) => !known.has(card.id));
-      const kept = refreshQueue(remaining, latest);
+      const kept = keep(remaining);
       if (kept.length === 0 && arrived) start(latest, clock, false);
       else setRemaining(kept);
     }
@@ -261,9 +299,10 @@ export function useStudySession<C extends SessionCard, Result>({
     const cur = remaining[0];
     if (!cur || blocked || interactionHandledRef.current) return;
     interactionHandledRef.current = true;
-    // Reviewing a card before it's due (only reachable while cramming) is a
-    // practice rep: the server logs it but leaves the schedule untouched, so
-    // cramming can't inflate intervals.
+    // Reviewing a card before it's due (cramming, or a card reviewed on another
+    // device since this one loaded) is a practice rep: the server logs it but
+    // leaves the schedule untouched, so cramming can't inflate intervals. The
+    // server decides by its own clock; the flag is a hint.
     const accepted = outbox.enqueue({
       reviewId: createReviewId(),
       cardId: cur.id,

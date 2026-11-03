@@ -3,24 +3,30 @@ import { requireUser } from "@/lib/supabase/require-user";
 import type { Vocab, VocabInput } from "@/lib/types";
 import { validateKanjiSelection } from "@/lib/kanji-selection";
 import { syncKanjiCards } from "@/lib/kanji-sync";
+import { selectAll } from "@/lib/supabase/select-all";
+import { listWords } from "@/lib/supabase/words";
+import { timed, withServerTiming } from "@/lib/server-timing";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+// A large import syncs the kanji cards of every word in it, and kanji never
+// seen before are looked up on kanjiapi.dev. 60 s is the highest limit every
+// Vercel plan accepts (Hobby without Fluid compute rejects more), and well past
+// what a sync of already-cached kanji needs.
+export const maxDuration = 60;
 
 // GET /api/vocab — list the signed-in user's vocab, newest first (RLS-scoped).
-export async function GET() {
+export const GET = withServerTiming(async function GET() {
   const auth = await requireUser();
   if ("response" in auth) return auth.response;
 
-  const { data, error } = await auth.supabase
-    .from("vocab")
-    .select("*")
-    .order("created_at", { ascending: false });
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  try {
+    const data = await listWords(auth.supabase, auth.user.id);
+    return NextResponse.json({ data });
+  } catch (error) {
+    return NextResponse.json({ error: (error as Error).message }, { status: 500 });
   }
-  return NextResponse.json({ data });
-}
+});
 
 function sanitize(
   v: Partial<VocabInput>
@@ -47,7 +53,7 @@ function sanitize(
 
 // POST /api/vocab — create one ({...}) or many ({ rows: [...] }) records for the
 // signed-in user.
-export async function POST(request: Request) {
+export const POST = withServerTiming(async function POST(request: Request) {
   const auth = await requireUser();
   if ("response" in auth) return auth.response;
 
@@ -83,18 +89,36 @@ export async function POST(request: Request) {
   // Skip anything already in this user's list (or repeated within this batch),
   // matched on the trimmed kanji — the same key the import preview dedups on.
   // Without this, re-adding the same dictionary word just stacks duplicates.
-  const { data: existing, error: existingError } = await auth.supabase
-    .from("vocab")
-    .select("id, kanji");
-  if (existingError) {
-    return NextResponse.json({ error: existingError.message }, { status: 500 });
+  // One word (the Add form, the dictionary) looks up just that word; a batch
+  // — or a word too long to put in a URL — reads every (id, kanji), page by
+  // page so a long list is compared in full.
+  let existing: { id: string; kanji: string }[];
+  try {
+    if (sanitized.length === 1 && sanitized[0].kanji.length <= 200) {
+      const { data, error } = await auth.supabase
+        .from("vocab")
+        .select("id, kanji")
+        .eq("user_id", auth.user.id)
+        .eq("kanji", sanitized[0].kanji);
+      if (error) throw new Error(error.message);
+      existing = data ?? [];
+    } else {
+      existing = await selectAll<{ id: string; kanji: string }>((from, to) =>
+        auth.supabase
+          .from("vocab")
+          .select("id, kanji", { count: "exact" })
+          .eq("user_id", auth.user.id)
+          .order("id")
+          .range(from, to)
+      );
+    }
+  } catch (error) {
+    return NextResponse.json({ error: (error as Error).message }, { status: 500 });
   }
 
   // Stamp each kept row with the owner so it satisfies the RLS insert policy
   // (user_id must equal auth.uid()).
-  const existingByKanji = new Map(
-    (existing ?? []).map((r) => [r.kanji as string, r.id as string])
-  );
+  const existingByKanji = new Map(existing.map((r) => [r.kanji, r.id]));
   const seen = new Set(existingByKanji.keys());
   const rows: (VocabInput & { user_id: string })[] = [];
   const updates: { id: string; row: VocabInput }[] = [];
@@ -138,7 +162,10 @@ export async function POST(request: Request) {
   if (rows.length === 0) {
     let syncWarning: string | null = null;
     try {
-      await syncKanjiCards(auth.supabase, auth.user.id, updatedRows);
+      await timed(
+        "kanji-sync",
+        syncKanjiCards(auth.supabase, auth.user.id, updatedRows)
+      );
     } catch (error) {
       syncWarning = (error as Error).message;
     }
@@ -161,10 +188,15 @@ export async function POST(request: Request) {
   const insertedRows = (data ?? []) as Vocab[];
   let syncWarning: string | null = null;
   try {
-    await syncKanjiCards(auth.supabase, auth.user.id, [
-      ...updatedRows,
-      ...insertedRows,
-    ]);
+    // A brand-new word has no kanji cards to reconcile unless it studies them,
+    // so a plain word skips the sync (and its kanji_cards read) entirely.
+    await timed(
+      "kanji-sync",
+      syncKanjiCards(auth.supabase, auth.user.id, [
+        ...updatedRows,
+        ...insertedRows.filter((row) => row.study_as_kanji),
+      ])
+    );
   } catch (syncError) {
     syncWarning = (syncError as Error).message;
   }
@@ -178,4 +210,4 @@ export async function POST(request: Request) {
     },
     { status: 201 }
   );
-}
+});

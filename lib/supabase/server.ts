@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import { timingFetch } from "@/lib/server-timing";
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SUPABASE_KEY =
@@ -14,6 +15,8 @@ export async function createClient() {
   const cookieStore = await cookies();
 
   return createServerClient(SUPABASE_URL, SUPABASE_KEY, {
+    // Times every Supabase call into the route's Server-Timing header.
+    global: { fetch: timingFetch },
     cookies: {
       getAll() {
         return cookieStore.getAll();

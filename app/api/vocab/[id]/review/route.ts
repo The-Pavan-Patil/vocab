@@ -3,6 +3,7 @@ import { requireReviewSession } from "@/lib/supabase/require-user";
 import { isEarly, schedule, type Grade } from "@/lib/srs";
 import { DECK_TUNING, readSrs, vocabDeckFromMode } from "@/lib/decks";
 import { isReviewId } from "@/lib/review-command";
+import { withServerTiming } from "@/lib/server-timing";
 
 export const runtime = "nodejs";
 
@@ -18,7 +19,7 @@ const GRADES: Grade[] = ["remember", "right", "wrong"];
 // to that deck's columns, and appends a row to the reviews log. Returns the
 // updated card. `mode` selects the Vocab deck ("word") or the Word Kanji deck
 // ("kanji") — two independent schedules on the same row (lib/decks.ts).
-export async function POST(request: Request, { params }: Params) {
+export const POST = withServerTiming(async function POST(request: Request, { params }: Params) {
   const auth = await requireReviewSession();
   if ("response" in auth) return auth.response;
 
@@ -50,9 +51,8 @@ export async function POST(request: Request, { params }: Params) {
     );
   }
   const reviewId = body.reviewId;
-  // A cram ("Study again") review of a not-yet-due card. We honor it only when
-  // the card really isn't due yet (checked below against the server clock).
-  const practice = body.practice === true;
+  // `practice` (a cram review of a not-yet-due card) is advisory only — see
+  // applySchedule below.
   // Which deck this review belongs to — picks the column set + tuning + log mode.
   const deck = vocabDeckFromMode(body.mode);
   const mode = deck === "word-kanji" ? "kanji" : "word";
@@ -77,7 +77,12 @@ export async function POST(request: Request, { params }: Params) {
   // sane defaults so a pre-migration / partially-populated row is treated as new.
   const prev = readSrs(card, deck);
 
-  const applySchedule = !(practice && isEarly(prev, reviewedAt));
+  // A card that isn't due yet by the server's clock is a practice rep: logged,
+  // schedule untouched, so early reviews can't inflate its interval. That
+  // covers cramming ("Study again"), and also a card shown from stale data —
+  // already reviewed on another device — whose client still thinks it's due
+  // and so doesn't send `practice`. The server's clock decides, not the flag.
+  const applySchedule = !isEarly(prev, reviewedAt);
   const scheduled = applySchedule
     ? schedule(prev, grade, reviewedAt, DECK_TUNING[deck])
     : {
@@ -129,4 +134,4 @@ export async function POST(request: Request, { params }: Params) {
   }
 
   return NextResponse.json({ data: updated });
-}
+});

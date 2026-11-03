@@ -1,25 +1,25 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/supabase/require-user";
 import { buildDocx } from "@/lib/export-docx";
-import type { Vocab } from "@/lib/types";
+import { listWords } from "@/lib/supabase/words";
+import { withServerTiming } from "@/lib/server-timing";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 // GET /api/export/docx — download the signed-in user's vocab list as a Word doc.
-export async function GET() {
+export const GET = withServerTiming(async function GET() {
   const auth = await requireUser();
   if ("response" in auth) return auth.response;
 
-  const { data, error } = await auth.supabase
-    .from("vocab")
-    .select("*")
-    .order("created_at", { ascending: false });
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  let words;
+  try {
+    words = await listWords(auth.supabase, auth.user.id);
+  } catch (error) {
+    return NextResponse.json({ error: (error as Error).message }, { status: 500 });
   }
 
-  const buffer = await buildDocx((data ?? []) as Vocab[]);
+  const buffer = await buildDocx(words);
   return new NextResponse(new Uint8Array(buffer), {
     headers: {
       "Content-Type":
@@ -27,4 +27,4 @@ export async function GET() {
       "Content-Disposition": 'attachment; filename="japanese-vocab.docx"',
     },
   });
-}
+});

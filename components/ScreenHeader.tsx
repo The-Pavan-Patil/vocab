@@ -4,7 +4,7 @@ import { createContext, useContext, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 // Whether the screen this header sits in is the one showing. Every tab panel
-// stays mounted (app/page.tsx), so without this the document would hold a
+// stays mounted (components/Home.tsx), so without this the document would hold a
 // hidden h1 per tab; only the visible screen's title is the h1.
 export const ScreenVisibleContext = createContext(true);
 

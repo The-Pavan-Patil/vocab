@@ -65,7 +65,9 @@ export default function ImportPanel({
   onImported,
 }: {
   vocab: Vocab[];
-  onImported: () => void;
+  // The rows the server saved (new words or updated duplicates), for the page
+  // to patch into its list.
+  onImported: (saved: Vocab[]) => void;
 }) {
   const [rows, setRows] = useState<VocabInput[] | null>(null);
   const [filename, setFilename] = useState("");
@@ -214,7 +216,7 @@ export default function ImportPanel({
     setBusy(true);
     setWorking("import");
     try {
-      const { inserted: n, syncWarning } = await createVocab(
+      const { rows: saved, inserted: n, syncWarning } = await createVocab(
         newRows.map((r) => ({ ...r, study_as_kanji: studyAllAsKanji }))
       );
       toast.success(`Imported ${n} new word${n === 1 ? "" : "s"}`);
@@ -228,7 +230,7 @@ export default function ImportPanel({
         );
         return remaining.length ? remaining : null;
       });
-      onImported();
+      onImported(saved);
     } catch (e) {
       toastError("Import failed", e, {
         nextStep: "The preview is unchanged — press Import to try again.",
@@ -245,7 +247,7 @@ export default function ImportPanel({
     async (r: VocabInput, dup: Vocab, index: number) => {
       setBusy(true);
       try {
-        const { syncWarning } = await updateVocab(dup.id, nonEmptyPatch(r));
+        const { data, syncWarning } = await updateVocab(dup.id, nonEmptyPatch(r));
         toast.success("Updated", { description: r.kanji });
         if (syncWarning) {
           toastKanjiSyncWarning("Updated, but Kanji sync needs a retry", syncWarning);
@@ -257,7 +259,7 @@ export default function ImportPanel({
           const next = rs?.filter((row) => row !== r) ?? null;
           return next && next.length ? next : null;
         });
-        onImported();
+        onImported([data]);
       } catch (e) {
         toastError("Update failed", e, {
           nextStep: "The row is still in the preview — press Update to try again.",
@@ -276,9 +278,23 @@ export default function ImportPanel({
     setBusy(true);
     setWorking("update");
     try {
-      const results = await Promise.all(
-        targets.map((r) => updateVocab(dupFor(r)!.id, nonEmptyPatch(r)))
-      );
+      // Rows that match the same saved word are applied to it one after the
+      // other (in preview order), so its last result is what the database
+      // holds; different words update in parallel.
+      const byWord = new Map<string, VocabInput[]>();
+      for (const r of targets) {
+        const id = dupFor(r)!.id;
+        byWord.set(id, [...(byWord.get(id) ?? []), r]);
+      }
+      const results = (
+        await Promise.all(
+          [...byWord].map(async ([id, rows]) => {
+            const saved = [];
+            for (const r of rows) saved.push(await updateVocab(id, nonEmptyPatch(r)));
+            return saved;
+          })
+        )
+      ).flat();
       toast.success(
         `Updated ${targets.length} existing word${targets.length === 1 ? "" : "s"}`
       );
@@ -291,7 +307,7 @@ export default function ImportPanel({
         const remaining = (rs ?? []).filter((r) => !dupFor(r));
         return remaining.length ? remaining : null;
       });
-      onImported();
+      onImported(results.map((result) => result.data));
     } catch (e) {
       toastError("Update failed", e, {
         nextStep: "The preview is unchanged — press Update to try again.",
