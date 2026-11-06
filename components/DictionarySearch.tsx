@@ -325,7 +325,7 @@ export default function DictionarySearch({
             placeholder="Search English, 日本語, or romaji…"
           />
         </InputGroup>
-        <Button type="submit" size="lg" disabled={loading}>
+        <Button type="submit" size="lg" className="h-11 px-4" disabled={loading}>
           {loading ? "Searching…" : "Search"}
         </Button>
       </form>
