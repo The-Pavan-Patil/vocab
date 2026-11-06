@@ -145,6 +145,38 @@ test("a compound run is split per kanji so a turned-off kanji gets its own hint"
   ]);
 });
 
+test("the word's saved romaji corrects the analyzer's reading before it's split", async () => {
+  const readings: Record<string, string[]> = {
+    一: ["イチ", "イツ", "ひと"],
+    本: ["ホン", "もと"],
+  };
+  const rows = await buildDesiredKanjiCards(
+    db,
+    "u1",
+    [vocab({ kanji: "一本", romaji: "ippon", kanji_selection: ["本"] })],
+    {
+      getKanji: async (_supabase, character) => ({
+        ...info(character, 5),
+        on: readings[character].filter((r) => /^[ァ-ヶ]/.test(r)),
+        kun: readings[character].filter((r) => !/^[ァ-ヶ]/.test(r)),
+      }),
+      // kuromoji reads the number and the counter apart: いち + ほん.
+      segment: async () => [
+        { surface: "一", reading: "いち", isKanji: true },
+        { surface: "本", reading: "ほん", isKanji: true },
+      ],
+    }
+  );
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].word_reading, "いっ.ぽん");
+  assert.equal(rows[0].reading, "ぽん");
+  assert.deepEqual(rows[0].word_prompt_parts, [
+    { surface: "一", reading: "いっ" },
+    { surface: "本", reading: null },
+  ]);
+});
+
 test("a failed lookup of a turned-off kanji leaves its run whole without failing the sync", async () => {
   const rows = await buildDesiredKanjiCards(
     db,

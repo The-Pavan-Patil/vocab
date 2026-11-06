@@ -12,6 +12,7 @@ import { selectAll } from "./supabase/select-all.ts";
 import {
   segment,
   dottedReading,
+  segmentsFromRomaji,
   singleKanjiReadings,
   splitCompoundSegments,
   type FuriganaSegment,
@@ -222,6 +223,11 @@ export async function buildDesiredKanjiCards(
     } catch {
       // Preserve previously-synced reading fields when analysis temporarily
       // fails. New rows simply receive the database's null defaults.
+    }
+    // The analyzer reads the bare word without context and misreads some
+    // (一本 = いちほん); the romaji saved on the word wins when it disagrees.
+    if (segments) {
+      segments = segmentsFromRomaji(word.kanji, word.romaji, segments) ?? segments;
     }
     const infos = await Promise.all(characters.map(loadInfo));
     if (segments) {

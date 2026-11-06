@@ -4,7 +4,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Languages } from "lucide-react";
 import type { KanjiCard, Vocab } from "@/lib/types";
 import { NEW_CARDS_PER_SESSION, isNew, nextDueAt } from "@/lib/srs";
-import { buildAllKanjiQueue, kanjiChars, newestFirst } from "@/lib/kanji-deck";
+import {
+  buildAllKanjiQueue,
+  kanjiChars,
+  newestFirst,
+  wordRomajiOf,
+} from "@/lib/kanji-deck";
 import { projectCard } from "@/lib/decks";
 import { reviewKanjiCard } from "@/lib/api";
 import type { KanjiCardsStore } from "@/hooks/use-kanji-cards";
@@ -22,7 +27,6 @@ import SessionEnd from "@/components/study/SessionEnd";
 import {
   KanjiInWordBack,
   KanjiInWordFront,
-  romajiReading,
   wordReadingOf,
 } from "@/components/study/KanjiInWordFaces";
 import { SessionSizeSelect } from "@/components/study/DeckSettings";
@@ -137,7 +141,7 @@ export default function AllKanjiDeck({
   }
 
   const wordReading = card ? wordReadingOf(card) : "";
-  const wordRomaji = romajiReading(wordReading);
+  const wordRomaji = card ? wordRomajiOf(card, cardWord) : "";
 
   // One polite live region for the whole deck: the next card (after the last
   // grade), the full back face on a flip, and the recap when the queue empties.
@@ -266,6 +270,7 @@ export default function AllKanjiDeck({
                 id={session.faceId}
                 answerRef={session.answerRef}
                 card={card}
+                romaji={wordRomaji}
                 kanjiInfo={store.kanji}
                 failed={store.failed}
               />

@@ -13,6 +13,10 @@ import {
   singleKanjiReadings,
   readingStems,
   splitCompoundSegments,
+  looseRomajiKey,
+  kanaFromRomaji,
+  alignReadingToWord,
+  segmentsFromRomaji,
   type FuriganaSegment,
 } from "./furigana.ts";
 
@@ -158,3 +162,97 @@ test("leaves single-kanji and kana segments untouched", () => {
   const segments = parseFuriganaHtml(TABERU);
   assert.deepEqual(splitCompoundSegments(segments, readingsOf), segments);
 });
+
+// --- The saved romaji as a check on the analyzer ---------------------------
+
+const kanji = (surface: string, reading: string): FuriganaSegment => ({
+  surface,
+  reading,
+  isKanji: true,
+});
+const kana = (surface: string): FuriganaSegment => ({
+  surface,
+  reading: surface,
+  isKanji: false,
+});
+
+test("romaji spelled differently for the same sounds shares a key", () => {
+  assert.equal(looseRomajiKey("Tōkyō"), looseRomajiKey("toukyou"));
+  assert.equal(looseRomajiKey("tokyo"), looseRomajiKey("toukyou"));
+  assert.equal(looseRomajiKey("kin'youbi"), looseRomajiKey("kinyoubi"));
+  assert.equal(looseRomajiKey("sensē"), looseRomajiKey("sensei"));
+  assert.notEqual(looseRomajiKey("ippon"), looseRomajiKey("ichihon"));
+});
+
+test("saved romaji converts to hiragana, or null when it isn't romaji", () => {
+  assert.equal(kanaFromRomaji("sen'en"), "せんえん");
+  assert.equal(kanaFromRomaji(" Tōkyō "), "とうきょう");
+  assert.equal(kanaFromRomaji("TABERU"), "たべる");
+  assert.equal(kanaFromRomaji("eat"), null);
+  assert.equal(kanaFromRomaji("  "), null);
+});
+
+test("a reading lines up with the word's kana as written", () => {
+  assert.deepEqual(alignReadingToWord("夜が明ける", "よがあける"), [
+    kanji("夜", "よ"),
+    kana("が"),
+    kanji("明", "あ"),
+    kana("ける"),
+  ]);
+  // Katakana keeps its script; the kanji after it takes the rest.
+  assert.deepEqual(alignReadingToWord("トマト畑", "とまとばたけ"), [
+    kana("トマト"),
+    kanji("畑", "ばたけ"),
+  ]);
+  // Long vowels match by sound: コーヒー against こおひい.
+  assert.deepEqual(alignReadingToWord("コーヒー豆", "こおひいまめ"), [
+    kana("コーヒー"),
+    kanji("豆", "まめ"),
+  ]);
+  // …and as wanakana reads ー after o (nōto → のうと) or as the doubled vowel.
+  assert.deepEqual(alignReadingToWord("ノート", "のうと"), [kana("ノート")]);
+  assert.deepEqual(alignReadingToWord("ノート", "のおと"), [kana("ノート")]);
+  // Digits take a reading like kanji, though they aren't kanji.
+  assert.deepEqual(alignReadingToWord("1か月", "いっかげつ"), [
+    { surface: "1", reading: "いっ", isKanji: false },
+    kana("か"),
+    kanji("月", "げつ"),
+  ]);
+});
+
+test("a reading that doesn't fit the word's kana lines up nowhere", () => {
+  assert.equal(alignReadingToWord("食べる", "のむ"), null);
+  assert.equal(alignReadingToWord("食べる", ""), null);
+});
+
+test("the analyzer's misreading is replaced by the saved romaji", () => {
+  assert.deepEqual(
+    segmentsFromRomaji("一本", "ippon", [kanji("一", "いち"), kanji("本", "ほん")]),
+    [kanji("一本", "いっぽん")]
+  );
+  assert.deepEqual(segmentsFromRomaji("金", "kin", [kanji("金", "きむ")]), [
+    kanji("金", "きん"),
+  ]);
+  assert.deepEqual(
+    segmentsFromRomaji("9月", "kugatsu", [kana("9"), kanji("月", "つき")]),
+    [kanji("9月", "くがつ")]
+  );
+});
+
+test("the analyzer's reading stays when the romaji agrees or can't be used", () => {
+  const taberu = [kanji("食", "た"), kana("べる")];
+  assert.equal(segmentsFromRomaji("食べる", "taberu", taberu), null);
+  assert.equal(segmentsFromRomaji("食べる", null, taberu), null);
+  assert.equal(segmentsFromRomaji("食べる", "eat", taberu), null);
+  assert.equal(segmentsFromRomaji("食べる", "nomu", taberu), null);
+  // Casual romaji without long vowels doesn't overrule a right reading.
+  assert.equal(
+    segmentsFromRomaji("東京", "tokyo", [kanji("東京", "とうきょう")]),
+    null
+  );
+  assert.equal(
+    segmentsFromRomaji("金曜日", "kinyoubi", [kanji("金曜日", "きんようび")]),
+    null
+  );
+});
+

@@ -86,7 +86,7 @@ function WordWithReadingHints({
   });
 }
 
-export function romajiReading(reading: string | null | undefined): string {
+function romajiReading(reading: string | null | undefined): string {
   if (!reading?.trim()) return "";
   return toRomaji(reading).trim();
 }
@@ -168,19 +168,21 @@ export function KanjiInWordBack({
   id,
   answerRef,
   card,
+  romaji,
   kanjiInfo,
   failed,
 }: {
   id: string;
   answerRef: Ref<HTMLSpanElement>;
   card: KanjiCard;
+  // Shown under the reading — the source word's saved romaji (wordRomajiOf).
+  romaji: string;
   // Details for the word's kanji, from the deck's one fetch (plus fallbacks).
   kanjiInfo: Record<string, KanjiInfo>;
   // Kanji whose fallback lookup failed this visit.
   failed: ReadonlySet<string>;
 }) {
   const wordReading = wordReadingOf(card);
-  const wordRomaji = romajiReading(wordReading);
   return (
     <span id={id} className="flex h-full w-full flex-col gap-2">
       <span className="block shrink-0 space-y-0.5">
@@ -194,9 +196,9 @@ export function KanjiInWordBack({
         >
           {wordReading || "—"}
         </span>
-        {wordRomaji && (
+        {romaji && (
           <span className="block text-sm leading-tight break-words text-muted-foreground sm:text-base">
-            {wordRomaji}
+            {romaji}
           </span>
         )}
         <span

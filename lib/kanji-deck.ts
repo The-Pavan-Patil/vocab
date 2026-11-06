@@ -1,10 +1,11 @@
 // ---------------------------------------------------------------------------
 // Smart Kanji / All Kanji deck helpers — JLPT level filtering, kanji extraction,
 // and the All Kanji queue. Pure + isomorphic (only the pure scheduler helpers
-// are imported), so both the UI and the tests can use them and the "does it
-// show every kanji?" property is verifiable in isolation.
+// and wanakana are imported), so both the UI and the tests can use them and the
+// "does it show every kanji?" property is verifiable in isolation.
 // ---------------------------------------------------------------------------
 
+import { toRomaji } from "wanakana";
 import { NEW_CARDS_PER_SESSION, isDue, isNew } from "./srs.ts";
 
 /** JLPT levels, easiest (N5 = 5) to hardest (N1 = 1). */
@@ -58,6 +59,21 @@ export function hideStudiedReadings<
       ? { ...part, reading: null }
       : part
   );
+}
+
+/**
+ * The romaji under a kanji card's reading: the romaji saved on its source word
+ * (curated, editable from the deck), else the card's word reading converted —
+ * with the kanji-boundary dots dropped, so た.べる reads "taberu".
+ */
+export function wordRomajiOf(
+  card: { word_reading: string | null; reading: string | null },
+  word: { romaji: string | null } | null | undefined
+): string {
+  const saved = word?.romaji?.trim();
+  if (saved) return saved;
+  const reading = (card.word_reading || card.reading || "").replaceAll(".", "").trim();
+  return reading ? toRomaji(reading).trim() : "";
 }
 
 /**

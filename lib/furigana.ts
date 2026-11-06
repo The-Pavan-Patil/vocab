@@ -6,13 +6,15 @@
 // reading) segments. Server-only. kuroshiro keeps a kanji compound as one run
 // (上手=じょうず); splitCompoundSegments divides it per kanji by the dictionary
 // readings. Best-effort: jukujikun (今日=きょう) can't be divided and stay one
-// run, so per-character readings aren't always known.
+// run, so per-character readings aren't always known. The analyzer guesses a
+// bare word's reading, so segmentsFromRomaji re-reads the word from its saved
+// romaji when the two disagree.
 // ---------------------------------------------------------------------------
 
 // `.ts` so Node's test runner resolves it; importing this module does NOT init
 // kuromoji (the require is lazy inside getConverter), so the pure parser below
 // stays testable without loading the heavy analyzer.
-import { toHiragana } from "wanakana";
+import { isKana, toHiragana, toRomaji } from "wanakana";
 import { getConverter } from "./sentence-romaji.ts";
 
 export type FuriganaSegment = {
@@ -172,6 +174,134 @@ export function splitCompoundSegments(
         }))
       : [segment];
   });
+}
+
+// ---------------------------------------------------------------------------
+// The word's saved romaji as a check on the analyzer. kuromoji reads a bare
+// word with no context, so counters lose their sound changes (一本 = いちほん),
+// special readings are missed (一人 = いちにん, 六日 = ろくにち), digits go
+// unread (9月 = 9 + つき) and a lone kanji can get an odd pick (金 = きむ). The
+// romaji saved on the word is curated, so when it says something else the
+// word is re-read from it.
+// ---------------------------------------------------------------------------
+
+/**
+ * A loose spelling key, so romaji written differently for the same sounds
+ * compares equal: case, apostrophes, spaces, macrons and vowel length aside
+ * (Tōkyō = toukyou = tokyo, kin'youbi = kinyoubi, sensei = sensē).
+ */
+export function looseRomajiKey(romaji: string): string {
+  return romaji
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[^a-z]/g, "")
+    .replace(/ou|ei/g, (pair) => pair[0])
+    .replace(/([aiueo])\1+/g, "$1");
+}
+
+/**
+ * Saved romaji as hiragana (sen'en → せんえん, Tōkyō → とうきょう), or null when
+ * it doesn't read as romaji throughout.
+ */
+export function kanaFromRomaji(romaji: string): string | null {
+  const spelled = romaji
+    .trim()
+    // Lowercase first: wanakana turns capitals into katakana.
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/([aiueo])[̂̄]/g, (_, vowel: string) =>
+      vowel === "o" ? "ou" : vowel + vowel
+    )
+    .replace(/\s+/g, "");
+  if (!spelled) return null;
+  const kana = toHiragana(spelled);
+  return isKana(kana) ? kana : null;
+}
+
+// Kana as written in a word. ヵ/ヶ (一ヶ月 = いっかげつ) and digits read like
+// kanji, so they sit in the runs that take a reading.
+const KANA_CHAR = /[ぁ-ゔゝゞァ-ヴヽヾー]/;
+
+function wordRuns(word: string): { surface: string; kana: boolean }[] {
+  const runs: { surface: string; kana: boolean }[] = [];
+  for (const character of word) {
+    const kana = KANA_CHAR.test(character);
+    const last = runs[runs.length - 1];
+    if (last && last.kana === kana) last.surface += character;
+    else runs.push({ surface: character, kana });
+  }
+  return runs;
+}
+
+// Kana match as hiragana (wanakana reads ー as う after o: ノート = のうと), or
+// as romaji (where ー doubles the vowel: コーヒー = koohii = こおひい). Not by
+// the loose key: dropping vowel length would let the next run take a vowel.
+const sameKana = (written: string, slice: string) =>
+  toHiragana(written) === toHiragana(slice);
+const sameRomaji = (written: string, slice: string) =>
+  toRomaji(written) === toRomaji(slice);
+
+/**
+ * Line a full reading up with the word: its kana must read as written, and
+ * each other run (kanji, digits) takes the kana between them — 夜が明ける with
+ * よがあける → 夜=よ, が, 明=あ, ける. Null unless exactly one way fits.
+ */
+export function alignReadingToWord(
+  word: string,
+  reading: string
+): FuriganaSegment[] | null {
+  const runs = wordRuns(word.trim());
+  if (runs.length === 0 || !reading) return null;
+  for (const same of [sameKana, sameRomaji]) {
+    const found: string[][] = [];
+    const walk = (at: number, index: number, pieces: string[]) => {
+      if (found.length > 1) return;
+      if (index === runs.length) {
+        if (at === reading.length) found.push(pieces);
+        return;
+      }
+      const run = runs[index];
+      const last = index === runs.length - 1;
+      for (let end = last ? reading.length : at + 1; end <= reading.length; end++) {
+        const slice = reading.slice(at, end);
+        if (!slice || (run.kana && !same(run.surface, slice))) continue;
+        walk(end, index + 1, [...pieces, slice]);
+      }
+    };
+    walk(0, 0, []);
+    if (found.length > 1) return null;
+    if (found.length === 1) {
+      return runs.map((run, index) =>
+        run.kana
+          ? { surface: run.surface, reading: run.surface, isKanji: false }
+          : {
+              surface: run.surface,
+              reading: found[0][index],
+              isKanji: HAS_KANJI.test(run.surface),
+            }
+      );
+    }
+  }
+  return null;
+}
+
+/**
+ * The word re-read from its saved romaji when the analyzer's reading sounds
+ * different (一本: いちほん vs "ippon" → いっぽん). Null keeps the analyzer's
+ * segments: there's no romaji, it agrees once spelling is set aside, it isn't
+ * romaji, or it can't be lined up with the word's kana.
+ */
+export function segmentsFromRomaji(
+  word: string,
+  romaji: string | null | undefined,
+  analyzed: FuriganaSegment[]
+): FuriganaSegment[] | null {
+  const saved = romaji ? looseRomajiKey(romaji) : "";
+  if (!saved || looseRomajiKey(toRomaji(fullReading(analyzed))) === saved) {
+    return null;
+  }
+  const reading = kanaFromRomaji(romaji!);
+  return reading ? alignReadingToWord(word, reading) : null;
 }
 
 // Parse kuroshiro furigana HTML into ordered segments. <rp> fallback parens are
