@@ -578,7 +578,7 @@ export default function Home({
       <nav
         data-app-nav
         aria-label="Sections"
-        className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-background px-2 pb-[env(safe-area-inset-bottom)] lg:hidden"
+        className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-background pr-[max(0.5rem,env(safe-area-inset-right))] pb-[env(safe-area-inset-bottom)] pl-[max(0.5rem,env(safe-area-inset-left))] lg:hidden"
       >
         <ul className="grid grid-cols-6">
           {TABS.map((t) => {

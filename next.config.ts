@@ -21,6 +21,19 @@ const nextConfig: NextConfig = {
     "kuroshiro-analyzer-kuromoji",
     "kuromoji",
   ],
+  // The service worker must never be served from a cache, or app updates
+  // reach installed phones late.
+  async headers() {
+    return [
+      {
+        source: "/sw.js",
+        headers: [
+          { key: "Content-Type", value: "application/javascript; charset=utf-8" },
+          { key: "Cache-Control", value: "no-cache, no-store, must-revalidate" },
+        ],
+      },
+    ];
+  },
 };
 
 export default nextConfig;

@@ -10,8 +10,9 @@ export async function proxy(request: NextRequest) {
 
 export const config = {
   // Run on everything EXCEPT API routes (they return their own 401 JSON),
-  // Next internals, and static assets/fonts.
+  // Next internals, static assets/fonts, and the PWA files (manifest, service
+  // worker, offline page), which must load signed out too.
   matcher: [
-    "/((?!api|_next/static|_next/image|favicon.ico|fonts|.*\\.(?:png|jpg|jpeg|gif|svg|ico|ttf|woff2?)$).*)",
+    "/((?!api|_next/static|_next/image|favicon.ico|fonts|manifest.webmanifest|sw.js|offline.html|.*\\.(?:png|jpg|jpeg|gif|svg|ico|ttf|woff2?)$).*)",
   ],
 };

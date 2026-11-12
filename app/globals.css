@@ -162,6 +162,10 @@
     line-height: 1.65;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
+    /* viewport-fit=cover (app/layout.tsx): keep content off a phone's notch
+       in landscape. 0 everywhere else. The fixed bottom nav pads itself. */
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
   }
   /*
    * Master scale lever. Tailwind v4 sizing is rem-based, so bumping the root

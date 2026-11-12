@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Noto_Sans_JP } from "next/font/google";
 import { Toaster } from "@/components/ui/sonner";
+import ServiceWorkerRegister from "@/components/ServiceWorkerRegister";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -23,13 +24,24 @@ const notoSansJP = Noto_Sans_JP({
 export const metadata: Metadata = {
   title: "日本語 Vocab — Japanese Study",
   description: "A calm, personal Japanese vocabulary study app with flashcards.",
+  // Added to the iOS home screen: open full-screen under the app's name, with
+  // the status bar on the page ground (manifest and icons: app/manifest.ts,
+  // app/apple-icon.png).
+  appleWebApp: {
+    capable: true,
+    title: "日本語 Vocab",
+    statusBarStyle: "default",
+  },
 };
 
 // Light-only theme: tell the browser (form controls, scrollbars) and match the
-// mobile browser chrome to the stone background (--background).
+// mobile browser chrome to the stone background (--background). viewport-fit
+// cover lets the page reach the screen edges, so env(safe-area-inset-*) has
+// values and the bottom nav pads itself clear of the home indicator.
 export const viewport: Viewport = {
   themeColor: "#f6f5f3",
   colorScheme: "light",
+  viewportFit: "cover",
 };
 
 export default function RootLayout({
@@ -44,6 +56,7 @@ export default function RootLayout({
     >
       <body className="min-h-full flex flex-col">
         {children}
+        <ServiceWorkerRegister />
         {/* Lifted clear of the fixed mobile bottom nav (--app-nav-clearance,
             globals.css) so a toast never covers it. */}
         <Toaster
