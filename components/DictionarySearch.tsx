@@ -3,6 +3,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { BookOpen, ChevronDown, Loader2, Plus, Search } from "lucide-react";
+import { entryClass } from "@/lib/word-class";
+import type { FuriganaSegment } from "@/lib/furigana";
 import { createVocab, fetchDictionaryDetails, searchDictionary } from "@/lib/api";
 import { entryToVocabInput } from "@/lib/dictionary";
 import { isDraftDirty } from "@/lib/vocab-draft";
@@ -17,10 +19,12 @@ import {
   CATEGORIES,
   type DictDetails,
   type DictEntry,
+  type DictMatchedForm,
   type Vocab,
   type VocabInput,
 } from "@/lib/types";
 import KanjiBreakdown from "@/components/KanjiBreakdown";
+import ConjugationTable from "@/components/ConjugationTable";
 import ConfirmDialog from "@/components/ConfirmDialog";
 import ScreenHeader from "@/components/ScreenHeader";
 import { Spinner } from "@/components/ui/spinner";
@@ -78,6 +82,45 @@ function jlptLabel(jlpt: string[]): string | null {
   return levels.length ? levels.sort().reverse()[0] : null;
 }
 
+// A sentence with furigana over its kanji (readings from the source, so 今日
+// reads きょう or こんにち as the sentence means).
+function SentenceWithFurigana({ segments }: { segments: FuriganaSegment[] }) {
+  return segments.map((segment, index) =>
+    segment.isKanji && segment.reading && segment.reading !== segment.surface ? (
+      <ruby key={index}>
+        {segment.surface}
+        <rp>(</rp>
+        <rt className="text-[0.6em] font-normal text-muted-foreground">
+          {segment.reading}
+        </rt>
+        <rp>)</rp>
+      </ruby>
+    ) : (
+      <span key={index}>{segment.surface}</span>
+    )
+  );
+}
+
+// A matched form's label in a sentence: "Past, polite" → "polite past form".
+function formName(label: string): string {
+  const names: Record<string, string> = {
+    Polite: "polite form",
+    "て-form": "て-form",
+    "Want to": "〜たい (want to) form",
+    "Can (potential)": "potential (can) form",
+    "Let's (volitional)": "volitional (let's) form",
+    Command: "command form",
+    "If (〜ば)": "〜ば (if) form",
+    "If / when (〜たら)": "〜たら (if/when) form",
+    "If (〜ければ)": "〜ければ (if) form",
+    "If (〜なら)": "〜なら (if) form",
+    "Before a noun": "before-a-noun form",
+  };
+  const [base, polite] = label.split(", ");
+  const name = names[base] ?? `${base.toLowerCase()} form`;
+  return polite ? `polite ${name}` : name;
+}
+
 export default function DictionarySearch({
   vocab,
   onAdded,
@@ -105,6 +148,12 @@ export default function DictionarySearch({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [urlQuery]);
   const [entries, setEntries] = useState<DictEntry[]>([]);
+  // The search was a conjugated form of the first result (行った → 行く).
+  const [matchedForm, setMatchedForm] = useState<DictMatchedForm | null>(null);
+  // Results whose conjugation table is open, by slug.
+  const [conjugationsOpen, setConjugationsOpen] = useState<ReadonlySet<string>>(
+    () => new Set()
+  );
   const [loading, setLoading] = useState(false);
   // The last search failed — shown as an error with Retry, not as "No
   // matches" (which would send the person off re-spelling a fine query).
@@ -158,8 +207,12 @@ export default function DictionarySearch({
     setSearched(q);
     setSearchFailed(false);
     setExpanded(null);
+    setConjugationsOpen(new Set());
+    setMatchedForm(null);
     try {
-      setEntries(await searchDictionary(q));
+      const found = await searchDictionary(q);
+      setEntries(found.results);
+      setMatchedForm(found.matchedForm);
     } catch (err) {
       toastError("Couldn’t search the dictionary", err, {
         retry: () => void search(q),
@@ -202,7 +255,18 @@ export default function DictionarySearch({
   const setField = (k: keyof VocabInput, v: string) =>
     setDraft((d) => (d ? { ...d, [k]: v } : d));
 
-  function openDraft(entry: DictEntry) {
+  function toggleConjugations(slug: string) {
+    setConjugationsOpen((open) => {
+      const next = new Set(open);
+      if (next.has(slug)) next.delete(slug);
+      else next.add(slug);
+      return next;
+    });
+  }
+
+  // `sentence`: an example the person picked ("Use as my sentence"), which
+  // replaces any saved one in the draft.
+  function openDraft(entry: DictEntry, sentence?: string) {
     const dictionaryDraft = entryToVocabInput(entry);
     const existing = vocab.find(
       (word) => word.kanji.trim() === dictionaryDraft.kanji.trim()
@@ -222,6 +286,7 @@ export default function DictionarySearch({
           kanji_selection: savedSelection,
         }
       : dictionaryDraft;
+    if (sentence) opened.sentence = sentence;
     setDraft(opened);
     setDraftStart(opened);
     setKanjiMissing(false);
@@ -336,7 +401,11 @@ export default function DictionarySearch({
           : searchFailed
             ? `Couldn’t search the dictionary for ${searched}`
             : searched !== null
-              ? `${entries.length} ${entries.length === 1 ? "result" : "results"} for ${searched}`
+              ? `${entries.length} ${entries.length === 1 ? "result" : "results"} for ${searched}${
+                  matchedForm
+                    ? `. ${matchedForm.query} is the ${formName(matchedForm.label)} of ${matchedForm.word}`
+                    : ""
+                }`
               : ""}
       </p>
       {/* The open entry's details arrive asynchronously; say when they do
@@ -395,10 +464,26 @@ export default function DictionarySearch({
         </Empty>
       ) : (
         <div className="flex flex-col gap-3">
+          {matchedForm && (
+            <p className="rounded-lg bg-muted px-3 py-2 text-sm">
+              <span lang="ja" translate="no" className="jp font-medium">
+                {matchedForm.query}
+              </span>{" "}
+              is the <strong className="font-medium">{formName(matchedForm.label)}</strong>{" "}
+              of{" "}
+              <span lang="ja" translate="no" className="jp font-medium">
+                {matchedForm.word}
+              </span>
+              .
+            </p>
+          )}
           {entries.map((entry) => {
             const jlpt = jlptLabel(entry.jlpt);
             const isOpen = expanded === entry.slug;
             const d = details[entry.word];
+            const cls = entryClass(entry.senses);
+            const showConjugations = cls !== null && conjugationsOpen.has(entry.slug);
+            const conjugationsId = `conjugations-${entry.slug}`;
             return (
               <Card key={entry.slug}>
                 <CardContent className="flex flex-col gap-3">
@@ -457,7 +542,22 @@ export default function DictionarySearch({
                     ))}
                   </ol>
 
-                  <div>
+                  <div className="flex flex-wrap gap-1">
+                    {cls && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => toggleConjugations(entry.slug)}
+                        aria-expanded={showConjugations}
+                        aria-controls={showConjugations ? conjugationsId : undefined}
+                      >
+                        <ChevronDown
+                          aria-hidden
+                          className={showConjugations ? "rotate-180 transition-transform" : "transition-transform"}
+                        />
+                        Conjugations
+                      </Button>
+                    )}
                     <Button
                       variant="ghost"
                       size="sm"
@@ -468,9 +568,21 @@ export default function DictionarySearch({
                         aria-hidden
                         className={isOpen ? "rotate-180 transition-transform" : "transition-transform"}
                       />
-                      {isOpen ? "Hide details" : "Examples & kanji"}
+                      Examples &amp; kanji
                     </Button>
                   </div>
+
+                  {showConjugations && cls && (
+                    <>
+                      <Separator />
+                      <ConjugationTable
+                        id={conjugationsId}
+                        word={entry.word}
+                        reading={entry.reading}
+                        cls={cls}
+                      />
+                    </>
+                  )}
 
                   {isOpen && (
                     <>
@@ -493,6 +605,69 @@ export default function DictionarySearch({
                         </div>
                       ) : d ? (
                         <div className="flex flex-col gap-4">
+                          {d.examples.length > 0 && (
+                            <div className="flex flex-col gap-3">
+                              <h3 className="text-sm font-semibold">Examples</h3>
+                              {d.examples.map((ex, i) => (
+                                <div key={i} className="flex flex-col gap-0.5 text-sm">
+                                  <p lang="ja" translate="no" className="jp text-base leading-loose">
+                                    {ex.segments ? (
+                                      <SentenceWithFurigana segments={ex.segments} />
+                                    ) : (
+                                      ex.japanese
+                                    )}
+                                  </p>
+                                  <p>{ex.english}</p>
+                                  {ex.romaji && (
+                                    <p className="text-xs text-muted-foreground">
+                                      {ex.romaji}
+                                    </p>
+                                  )}
+                                  <div>
+                                    <Button
+                                      variant="link"
+                                      size="sm"
+                                      className="h-auto px-0 py-0.5 text-xs"
+                                      onClick={() => openDraft(entry, ex.japanese)}
+                                    >
+                                      <Plus aria-hidden />
+                                      Use as my sentence
+                                      <span className="sr-only">
+                                        {" "}for {entry.word}: {ex.japanese}
+                                      </span>
+                                    </Button>
+                                  </div>
+                                </div>
+                              ))}
+                              <p className="text-xs text-muted-foreground">
+                                Sentences from{" "}
+                                <a
+                                  href="https://tatoeba.org"
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="underline underline-offset-2"
+                                >
+                                  Tatoeba
+                                </a>{" "}
+                                (CC BY 2.0 FR)
+                                {d.examples.some((ex) => ex.segments) && (
+                                  <>
+                                    {" "}via{" "}
+                                    <a
+                                      href="https://jotoba.de"
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="underline underline-offset-2"
+                                    >
+                                      Jotoba
+                                    </a>
+                                  </>
+                                )}
+                                .
+                              </p>
+                            </div>
+                          )}
+
                           {d.kanji.length > 0 && (
                             <div className="flex flex-col gap-2">
                               <h3 className="text-sm font-semibold">Kanji</h3>
@@ -520,25 +695,6 @@ export default function DictionarySearch({
                                         {k.jlpt}
                                       </div>
                                     )}
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-
-                          {d.examples.length > 0 && (
-                            <div className="flex flex-col gap-2">
-                              <h3 className="text-sm font-semibold">Examples</h3>
-                              {d.examples.map((ex, i) => (
-                                <div key={i} className="text-sm">
-                                  <div lang="ja" translate="no" className="jp">{ex.japanese}</div>
-                                  {ex.romaji && (
-                                    <div className="text-muted-foreground italic">
-                                      {ex.romaji}
-                                    </div>
-                                  )}
-                                  <div className="text-muted-foreground">
-                                    {ex.english}
                                   </div>
                                 </div>
                               ))}

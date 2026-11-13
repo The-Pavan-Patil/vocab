@@ -55,6 +55,18 @@ export function romajiSearch(
 }
 
 /**
+ * The list with `entry` moved (or added) to the top — the dictionary form of a
+ * conjugated search — still capped at one page.
+ */
+export function leadWith(
+  results: DictEntry[],
+  entry: DictEntry,
+  limit = RESULT_LIMIT
+): DictEntry[] {
+  return [entry, ...results.filter((e) => e.slug !== entry.slug)].slice(0, limit);
+}
+
+/**
  * One result list from the per-query lists (in key order): duplicates dropped
  * by slug, entries whose shown romaji is exactly what was typed moved to the
  * top, Jisho's order kept otherwise, capped at one page.

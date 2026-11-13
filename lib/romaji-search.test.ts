@@ -7,7 +7,12 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mergeResults, normalizeRomaji, romajiSearch } from "./romaji-search.ts";
+import {
+  leadWith,
+  mergeResults,
+  normalizeRomaji,
+  romajiSearch,
+} from "./romaji-search.ts";
 import type { DictEntry } from "./types.ts";
 
 const keys = (q: string) => romajiSearch(q)?.keys ?? null;
@@ -99,4 +104,18 @@ test("the merged list is capped at one page", () => {
   assert.equal(merged.length, 20);
   assert.equal(merged[0].slug, "b5");
   assert.equal(merged[1].slug, "a0");
+});
+
+test("a conjugated search's dictionary form leads the results", () => {
+  const entry = (slug: string) =>
+    ({ slug, word: slug, reading: "", romaji: "", isCommon: false, jlpt: [], senses: [] }) as DictEntry;
+  const results = [entry("行ったり来たり"), entry("行く"), entry("行い")];
+  assert.deepEqual(
+    leadWith(results, entry("行く")).map((e) => e.slug),
+    ["行く", "行ったり来たり", "行い"]
+  );
+  assert.deepEqual(
+    leadWith(results, entry("いく"), 2).map((e) => e.slug),
+    ["いく", "行ったり来たり"]
+  );
 });

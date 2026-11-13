@@ -1,6 +1,7 @@
 import type {
   DictDetails,
   DictEntry,
+  DictMatchedForm,
   Grade,
   KanjiCard,
   KanjiDeckData,
@@ -225,13 +226,20 @@ export async function exportList(format: "docx" | "pdf"): Promise<Blob> {
 
 // --- Dictionary (Takoboto-style search via Jisho/JMdict) ---
 
-export async function searchDictionary(q: string): Promise<DictEntry[]> {
+export async function searchDictionary(q: string): Promise<{
+  results: DictEntry[];
+  // Set when the query was a conjugated form (行った → 行く, "Past").
+  matchedForm: DictMatchedForm | null;
+}> {
   const res = await fetch(`/api/dictionary?q=${encodeURIComponent(q)}`, {
     cache: "no-store",
   });
   const json = await parseJson(res);
   if (!res.ok) throw new Error((json.error as string) ?? "Search failed");
-  return (json.results as DictEntry[]) ?? [];
+  return {
+    results: (json.results as DictEntry[]) ?? [],
+    matchedForm: (json.matchedForm as DictMatchedForm | null) ?? null,
+  };
 }
 
 export async function fetchDictionaryDetails(

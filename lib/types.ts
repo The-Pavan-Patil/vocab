@@ -1,3 +1,5 @@
+import type { FuriganaSegment } from "./furigana.ts";
+
 export type Vocab = {
   id: string;
   kanji: string;
@@ -101,6 +103,16 @@ export type DictExample = {
   kana: string; // reading
   romaji: string; // full romaji (for learners who can't read all the kanji)
   english: string;
+  // The sentence as furigana segments, when the source gives them (Jotoba);
+  // absent for the Jisho fallback, which shows the plain sentence.
+  segments?: FuriganaSegment[];
+};
+
+// A search that was a conjugated form of a word: 行った → 行く, "Past".
+export type DictMatchedForm = {
+  query: string;
+  word: string;
+  label: string;
 };
 
 export type DictKanji = {
