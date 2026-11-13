@@ -39,7 +39,11 @@ export default function ScreenHeader({
         )}
       </div>
       {actions && (
-        <div className="flex flex-wrap items-center gap-2">{actions}</div>
+        // Full width on a phone, where it wraps under the title, so actions
+        // can share the row evenly (flex-1).
+        <div className="flex flex-wrap items-center gap-2 max-sm:w-full">
+          {actions}
+        </div>
       )}
     </div>
   );

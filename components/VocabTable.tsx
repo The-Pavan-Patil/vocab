@@ -2,6 +2,7 @@
 
 import {
   memo,
+  useCallback,
   useDeferredValue,
   useEffect,
   useMemo,
@@ -9,11 +10,19 @@ import {
   useState,
 } from "react";
 import { toast } from "sonner";
-import { Download, Languages, Pencil, Search, Trash2 } from "lucide-react";
+import {
+  ChevronDown,
+  Download,
+  Languages,
+  Pencil,
+  Search,
+  Trash2,
+} from "lucide-react";
 import { deleteVocab, exportList } from "@/lib/api";
 import { toastError } from "@/lib/notify";
 import { cn } from "@/lib/utils";
 import { setSearchParams, useSearchParam } from "@/hooks/use-search-param";
+import { useMediaQuery } from "@/hooks/use-media-query";
 import {
   CATEGORIES,
   COLUMNS,
@@ -160,6 +169,19 @@ export default function VocabTable({
   const searchRef = useRef<HTMLInputElement>(null);
   const [handledRevealId, setHandledRevealId] = useState<number | null>(null);
   const [exporting, setExporting] = useState<"docx" | "pdf" | null>(null);
+  // Below md (48rem) the list is a stack of cards, not the wide table. Picked
+  // in JS so only one layout is in the DOM (this panel is client-built).
+  const compact = useMediaQuery("(width < 48rem)");
+  // Cards opened to show their tip and sentence; kept across searches.
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+  const toggleExpanded = useCallback((id: string) => {
+    setExpanded((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
 
   const showingReveal =
     revealWord !== null &&
@@ -269,7 +291,7 @@ export default function VocabTable({
                 variant="outline"
                 onClick={() => void downloadList(format)}
                 aria-disabled={exporting !== null || undefined}
-                className="aria-disabled:opacity-50"
+                className="aria-disabled:opacity-50 max-sm:flex-1"
               >
                 {exporting === format ? (
                   <Spinner data-icon="inline-start" aria-hidden />
@@ -290,10 +312,12 @@ export default function VocabTable({
           `${WORDS.format(vocab.length)} ${vocab.length === 1 ? "word" : "words"} · ${WORDS.format(inKanjiDeck)} in the Kanji deck`}
       </ScreenHeader>
 
-      {/* Toolbar. On a phone the filters stretch to share full rows instead
-          of each leaving a ragged gap; from sm up they keep fixed widths. */}
+      {/* Toolbar. On a phone the search takes its own row and the filters
+          share one row that scrolls sideways, edge to edge; from md up the
+          filters' wrapper dissolves (contents) and everything wraps inline,
+          the filters at fixed widths from sm. */}
       <div className="flex flex-wrap items-center gap-3">
-        <InputGroup className="min-w-[180px] flex-1">
+        <InputGroup className="min-w-[180px] flex-1 max-md:h-10 max-md:basis-full">
           <InputGroupAddon>
             <Search />
           </InputGroupAddon>
@@ -310,6 +334,7 @@ export default function VocabTable({
           />
         </InputGroup>
 
+        <div className="-mx-4 flex basis-[calc(100%+2rem)] gap-2 overflow-x-auto px-4 [scrollbar-width:none] sm:-mx-6 sm:basis-[calc(100%+3rem)] sm:px-6 md:contents [&::-webkit-scrollbar]:hidden">
         <Select
           value={active.field}
           onValueChange={(next) => {
@@ -317,7 +342,7 @@ export default function VocabTable({
           }}
         >
           <SelectTrigger
-            className="min-w-32 flex-1 sm:w-36 sm:flex-none"
+            className="min-w-32 shrink-0 max-md:h-9 md:w-36 md:flex-none"
             aria-label="Search in"
           >
             <SelectValue />
@@ -342,7 +367,7 @@ export default function VocabTable({
           }}
         >
           <SelectTrigger
-            className="min-w-44 flex-1 sm:w-48 sm:flex-none"
+            className="min-w-44 shrink-0 max-md:h-9 md:w-48 md:flex-none"
             aria-label="Filter by kanji study"
           >
             <SelectValue />
@@ -363,7 +388,7 @@ export default function VocabTable({
           onValueChange={(category) => changeFilters({ cat: category })}
         >
           <SelectTrigger
-            className="min-w-36 flex-1 sm:w-40 sm:flex-none"
+            className="min-w-36 shrink-0 max-md:h-9 md:w-40 md:flex-none"
             aria-label="Filter by category"
           >
             <SelectValue />
@@ -379,7 +404,7 @@ export default function VocabTable({
             </SelectGroup>
           </SelectContent>
         </Select>
-
+        </div>
       </div>
 
       {loadState === "ready" && (
@@ -402,7 +427,7 @@ export default function VocabTable({
         <div className="flex flex-col gap-2" aria-busy="true">
           <span className="sr-only">Loading your words…</span>
           {[0, 1, 2, 3, 4].map((i) => (
-            <Skeleton key={i} className="h-12 w-full rounded-lg" />
+            <Skeleton key={i} className="h-12 w-full rounded-lg max-md:h-16" />
           ))}
         </div>
       ) : loadState === "failed" ? null : filtered.length === 0 ? (
@@ -416,6 +441,25 @@ export default function VocabTable({
             </EmptyDescription>
           </EmptyHeader>
         </Empty>
+      ) : compact ? (
+        <ul
+          aria-label="Your words"
+          className="divide-y divide-border overflow-hidden rounded-xl border bg-card"
+        >
+          {filtered.map((v) => (
+            <VocabCard
+              key={v.id}
+              word={v}
+              busy={busy}
+              expanded={
+                expanded.has(v.id) || (showingReveal && v.kanji === revealWord.word)
+              }
+              onToggle={toggleExpanded}
+              onEdit={setEditing}
+              onDelete={setPendingDelete}
+            />
+          ))}
+        </ul>
       ) : (
         <div className="overflow-x-auto rounded-xl border bg-card">
           <Table>
@@ -520,6 +564,44 @@ function Missing() {
   );
 }
 
+// The word with its Kanji-deck membership riding on it (the column it used to
+// have was empty on most rows): the kanji you turned on carry the study hue,
+// underlined so it isn't colour alone, and the icon (the kanji decks' own)
+// names them.
+function WordWithStudiedKanji({ word: v }: { word: Vocab }) {
+  const studied = studiedKanjiOf(v);
+  const studiedLabel = `Studying ${studied.join(", ")} as Kanji`;
+  return (
+    <>
+      <span lang="ja" translate="no" className="jp">
+        {studied.length > 0
+          ? [...v.kanji].map((character, index) => (
+              <span
+                key={index}
+                className={
+                  studied.includes(character)
+                    ? "text-data underline decoration-data/50 underline-offset-4"
+                    : undefined
+                }
+              >
+                {character}
+              </span>
+            ))
+          : v.kanji}
+      </span>
+      {studied.length > 0 && (
+        <span title={studiedLabel}>
+          <Languages
+            className="ml-1.5 inline-block size-3.5 align-[-0.1em] text-muted-foreground"
+            role="img"
+            aria-label={studiedLabel}
+          />
+        </span>
+      )}
+    </>
+  );
+}
+
 // One word's row. Memoized (the parent's callbacks are state setters, so they
 // never change) — a new search or filter re-renders only rows whose word or
 // busy state changed, not the whole list.
@@ -534,41 +616,11 @@ const VocabRow = memo(function VocabRow({
   onEdit: (word: Vocab) => void;
   onDelete: (word: Vocab) => void;
 }) {
-  const studied = studiedKanjiOf(v);
-  const studiedLabel = `Studying ${studied.join(", ")} as Kanji`;
   return (
     // No hover fill: the pinned cells are opaque, and a fill would stop at them.
     <TableRow className="hover:bg-transparent">
       <TableCell className={cn("text-base font-medium", STICKY_FIRST)}>
-        {/* Kanji-deck membership rides on the word (the column it used to
-            have was empty on most rows): the kanji you turned on carry the
-            study hue, underlined so it isn't colour alone, and the icon (the
-            kanji decks' own) names them. */}
-        <span lang="ja" translate="no" className="jp">
-          {studied.length > 0
-            ? [...v.kanji].map((character, index) => (
-                <span
-                  key={index}
-                  className={
-                    studied.includes(character)
-                      ? "text-data underline decoration-data/50 underline-offset-4"
-                      : undefined
-                  }
-                >
-                  {character}
-                </span>
-              ))
-            : v.kanji}
-        </span>
-        {studied.length > 0 && (
-          <span title={studiedLabel}>
-            <Languages
-              className="ml-1.5 inline-block size-3.5 align-[-0.1em] text-muted-foreground"
-              role="img"
-              aria-label={studiedLabel}
-            />
-          </span>
-        )}
+        <WordWithStudiedKanji word={v} />
       </TableCell>
       <TableCell className="text-muted-foreground">
         {v.romaji || <Missing />}
@@ -620,5 +672,135 @@ const VocabRow = memo(function VocabRow({
         </div>
       </TableCell>
     </TableRow>
+  );
+});
+
+// One word as a phone card: the word, romaji, category and meaning, with the
+// tip and sentence a tap away. The summary is a button (aria-expanded) beside
+// the actions, not around them — buttons can't nest. A word with neither tip
+// nor sentence has nothing to open, so it's plain text. Memoized like
+// VocabRow (onToggle is a stable callback). content-visibility skips layout
+// and paint for cards off screen, so a long list scrolls lightly.
+const VocabCard = memo(function VocabCard({
+  word: v,
+  busy,
+  expanded,
+  onToggle,
+  onEdit,
+  onDelete,
+}: {
+  word: Vocab;
+  busy: boolean;
+  expanded: boolean;
+  onToggle: (id: string) => void;
+  onEdit: (word: Vocab) => void;
+  onDelete: (word: Vocab) => void;
+}) {
+  const hasDetails = Boolean(v.tips?.trim() || v.sentence?.trim());
+  const detailsId = `word-details-${v.id}`;
+  const summary = (
+    <>
+      <span className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+        <span className="text-lg leading-snug font-medium">
+          <WordWithStudiedKanji word={v} />
+        </span>
+        {v.romaji && (
+          <span className="text-sm text-muted-foreground">{v.romaji}</span>
+        )}
+        {v.category && (
+          <Badge variant="secondary" className="self-center">
+            {v.category}
+          </Badge>
+        )}
+      </span>
+      <span
+        className={cn(
+          "mt-0.5 block text-sm break-words",
+          !expanded && "line-clamp-2",
+          !v.english && "text-muted-foreground"
+        )}
+      >
+        {v.english || "No meaning yet"}
+      </span>
+    </>
+  );
+  return (
+    <li className="[contain-intrinsic-size:auto_76px] [content-visibility:auto]">
+      <div className="flex items-start gap-1 py-1 pr-1">
+        {hasDetails ? (
+          <button
+            type="button"
+            onClick={() => onToggle(v.id)}
+            aria-expanded={expanded}
+            aria-controls={detailsId}
+            className="flex min-w-0 flex-1 items-start gap-2 rounded-lg py-2 pl-4 text-left outline-hidden focus-visible:ring-3 focus-visible:ring-ring/50"
+          >
+            <span className="min-w-0 flex-1">{summary}</span>
+            <ChevronDown
+              aria-hidden
+              className={cn(
+                "mt-1.5 size-4 shrink-0 text-muted-foreground transition-transform motion-reduce:transition-none",
+                expanded && "rotate-180"
+              )}
+            />
+          </button>
+        ) : (
+          <div className="min-w-0 flex-1 py-2 pl-4">{summary}</div>
+        )}
+        <div className="flex shrink-0 gap-0.5 pt-0.5">
+          <Button
+            size="icon-lg"
+            variant="ghost"
+            className="size-10"
+            onClick={() => onEdit(v)}
+            aria-label={`Edit ${v.kanji}`}
+          >
+            <Pencil aria-hidden />
+          </Button>
+          <Button
+            size="icon-lg"
+            variant="ghost"
+            className="size-10 text-muted-foreground hover:text-destructive aria-disabled:opacity-50"
+            // aria-disabled, not disabled: see VocabRow.
+            onClick={() => {
+              if (!busy) onDelete(v);
+            }}
+            aria-disabled={busy || undefined}
+            aria-label={`Delete ${v.kanji}`}
+            data-delete-id={v.id}
+          >
+            <Trash2 aria-hidden />
+          </Button>
+        </div>
+      </div>
+      {hasDetails && (
+        <dl
+          id={detailsId}
+          hidden={!expanded}
+          className="space-y-2 px-4 pb-4 text-sm"
+        >
+          {v.tips?.trim() && (
+            <div>
+              <dt className="text-xs font-medium text-muted-foreground">
+                Tip (Marathi)
+              </dt>
+              <dd lang="mr" className="break-words">
+                {v.tips}
+              </dd>
+            </div>
+          )}
+          {v.sentence?.trim() && (
+            <div>
+              <dt className="text-xs font-medium text-muted-foreground">
+                Sentence
+              </dt>
+              <dd lang="ja" translate="no" className="jp break-words">
+                {v.sentence}
+              </dd>
+            </div>
+          )}
+        </dl>
+      )}
+    </li>
   );
 });
